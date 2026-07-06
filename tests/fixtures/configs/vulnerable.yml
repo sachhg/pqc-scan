@@ -1,0 +1,18 @@
+# Fixture: TLS configuration with quantum-vulnerable / broken settings.
+server:
+  # PQC012 — outdated protocol version.
+  ssl_version: TLSv1.1
+  tls_min_version: "1.0"
+
+  # PQC012 — RSA / ECDSA cipher suites (quantum-vulnerable key exchange).
+  ciphers:
+    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-ECDSA-AES128-GCM-SHA256
+    - DES-CBC3-SHA          # broken cipher (3DES)
+
+  # PQC001 — RSA certificate key type.
+  key_type: rsa
+
+certificate:
+  # PQC009 — SHA-1 certificate signature (critical in signing context).
+  signature_algorithm: sha1WithRSAEncryption

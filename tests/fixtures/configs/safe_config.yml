@@ -1,0 +1,14 @@
+# Fixture: hardened TLS 1.3 configuration. MUST produce ZERO findings.
+server:
+  # TLS 1.3 only — no legacy protocols.
+  ssl_version: TLSv1.3
+  tls_min_version: "1.3"
+
+  # TLS 1.3 AEAD cipher suites (no RSA/ECDSA/DES in the suite names).
+  ciphers:
+    - TLS_AES_256_GCM_SHA384
+    - TLS_AES_128_GCM_SHA256
+    - TLS_CHACHA20_POLY1305_SHA256
+
+certificate:
+  signature_algorithm: sha256WithRSAEncryption  # SHA-256 digest, not flagged

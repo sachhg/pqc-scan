@@ -1,0 +1,88 @@
+# PQC Scan — composite GitHub Action
+#
+# Scans a repository for quantum-vulnerable cryptography with pqc-scan,
+# emits SARIF, and uploads it to GitHub code scanning (Security tab).
+#
+# Usage in a workflow:
+#   - uses: actions/checkout@v4
+#   - uses: ./            # or pqc-scan/pqc-scan@v1 once published
+#     with:
+#       path: .
+#       severity: medium
+#       output-sarif: pqc-scan.sarif
+#       fail-on-findings: false
+name: PQC Scan
+description: Detect quantum-vulnerable cryptography and upload results to GitHub code scanning.
+author: pqc-scan contributors
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  path:
+    description: File or directory to scan.
+    required: false
+    default: "."
+  severity:
+    description: "Minimum severity to report: critical | high | medium | low."
+    required: false
+    default: "medium"
+  output-sarif:
+    description: Path to write the SARIF report to.
+    required: false
+    default: "pqc-scan.sarif"
+  fail-on-findings:
+    description: "Fail the job if any findings are reported (true/false)."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install pqc-scan
+      shell: bash
+      # Install pqc-scan from the action's own checkout so this works without a
+      # PyPI release. Once published, this could simply be: pip install pqc-scan
+      run: pip install "${{ github.action_path }}"
+
+    - name: Run pqc-scan
+      id: scan
+      shell: bash
+      # Don't abort here — we still want to upload the SARIF below even when the
+      # scan exits non-zero (e.g. with --fail-on-findings). A later step
+      # re-enforces the failure if requested.
+      continue-on-error: true
+      run: |
+        pqc-scan scan "${{ inputs.path }}" \
+          --severity "${{ inputs.severity }}" \
+          --output sarif \
+          --output-file "${{ inputs.output-sarif }}" \
+          ${{ inputs.fail-on-findings == 'true' && '--fail-on-findings' || '' }}
+
+    - name: Check SARIF report exists
+      id: sarif
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.output-sarif }}" ]; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload SARIF to code scanning
+      if: steps.sarif.outputs.exists == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.output-sarif }}
+
+    - name: Enforce failure on findings
+      if: inputs.fail-on-findings == 'true' && steps.scan.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::error::pqc-scan reported findings and fail-on-findings is enabled."
+        exit 1

@@ -1,0 +1,31 @@
+# .pqcscan.yml — root configuration for pqc-scan (used when scanning this repo).
+# Docs: https://github.com/pqc-scan/pqc-scan
+#
+# NOTE: we deliberately do NOT exclude tests/** here. The repo scans its own
+# fixtures in CI, so those files must remain in scope.
+
+exclude:
+  - "**/node_modules/**"
+  - "**/.venv/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/vendor/**"
+
+# Minimum severity to report: critical | high | medium | low
+severity_threshold: medium
+
+languages:
+  - python
+  - javascript
+  - java
+  - go
+
+scan_configs: true        # Scan YAML/JSON/TOML/.conf config files
+scan_dependencies: true   # Scan dependency manifests (requirements.txt, package.json, ...)
+
+rules:
+  disable: []             # e.g. [PQC010] to silence a specific rule
+
+output:
+  default_format: console
+  cbom_path: cbom.json

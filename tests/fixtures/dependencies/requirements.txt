@@ -1,0 +1,8 @@
+# Fixture: dependency manifest with quantum-vulnerable libraries (PQC014).
+requests==2.31.0
+pycrypto==2.6.1
+ecdsa>=0.18.0
+rsa==4.9
+cryptography>=42.0.0
+paramiko~=3.4
+pyyaml

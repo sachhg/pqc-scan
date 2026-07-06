@@ -1,0 +1,25 @@
+# Example: how downstream repositories consume the PQC Scan action.
+# This same workflow runs in this repo (via "uses: ./") to dogfood the action.
+name: PQC Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pqc-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run PQC Scan
+        uses: ./
+        with:
+          severity: medium
+          fail-on-findings: false
