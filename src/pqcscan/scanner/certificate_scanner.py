@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import bisect
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,10 +129,12 @@ _COMMON_NAME_OID = "2.5.4.3"
 # PEM extraction
 # --------------------------------------------------------------------------- #
 
-_PEM_RE = re.compile(
-    r"-----BEGIN (?P<label>[A-Z][A-Z0-9 ]*)-----(?P<body>.*?)-----END (?P=label)-----",
-    re.DOTALL,
-)
+#: PEM boundary markers. Blocks are paired in a single linear pass (see
+#: :func:`_iter_pem_blocks`) rather than matched by one regex that contains the
+#: body — a backreferenced ``.*?`` body makes every *unterminated* BEGIN marker
+#: scan to end of file, which is quadratic in the number of markers. A 0.5 MB
+#: file of bare BEGIN lines took ~39s that way; pairing makes it linear.
+_PEM_BOUNDARY_RE = re.compile(r"-----(BEGIN|END) ([A-Z][A-Z0-9 ]*)-----")
 # RFC 1421 headers inside a legacy encrypted PEM block ("Proc-Type: 4,ENCRYPTED").
 _PEM_HEADER_RE = re.compile(r"^[A-Za-z-]+:.*$", re.MULTILINE)
 # JSON and .env files carry PEM bodies with literal backslash-n separators.
@@ -408,21 +411,21 @@ class CertificateScanner(BaseScanner):
         if "-----BEGIN" not in text and not _SSH_LINE_RE.search(text):
             return []
         emitter = _Emitter(str(path), self.context)
-        self._scan_pem_blocks(text, emitter)
-        self._scan_ssh_public_keys(text, emitter)
+        starts = _line_starts(text)
+        self._scan_pem_blocks(text, starts, emitter)
+        self._scan_ssh_public_keys(text, starts, emitter)
         return emitter.findings
 
     # ----- PEM ------------------------------------------------------------ #
 
-    def _scan_pem_blocks(self, text: str, emit: "_Emitter") -> None:
-        for match in _PEM_RE.finditer(text):
-            label = match.group("label").strip()
+    def _scan_pem_blocks(self, text: str, starts: list[int], emit: "_Emitter") -> None:
+        for label, body, start_index in _iter_pem_blocks(text):
             if label in _UNDETERMINED_LABELS:
                 continue
-            der = _decode_pem_body(match.group("body"))
+            der = _decode_pem_body(body)
             if der is None:
                 continue
-            line, col = _position(text, match.start())
+            line, col = _position(text, start_index, starts)
             snippet = f"-----BEGIN {label}-----"
             if label in ("CERTIFICATE", "X509 CERTIFICATE", "TRUSTED CERTIFICATE"):
                 self._emit_certificate(der, emit, line, col, snippet, kind="certificate")
@@ -495,7 +498,7 @@ class CertificateScanner(BaseScanner):
 
     # ----- OpenSSH public keys -------------------------------------------- #
 
-    def _scan_ssh_public_keys(self, text: str, emit: "_Emitter") -> None:
+    def _scan_ssh_public_keys(self, text: str, starts: list[int], emit: "_Emitter") -> None:
         for match in _SSH_LINE_RE.finditer(text):
             try:
                 blob = base64.b64decode(match.group(2), validate=True)
@@ -504,7 +507,7 @@ class CertificateScanner(BaseScanner):
             info = _ssh_key_info(blob)
             if info is None:
                 continue
-            line, col = _position(text, match.start())
+            line, col = _position(text, match.start(), starts)
             emit.key(
                 info, line, col, f"{match.group(1)} {match.group(2)[:24]}...",
                 private=False, form="OpenSSH",
@@ -622,6 +625,25 @@ class _Emitter:
 # --------------------------------------------------------------------------- #
 
 
+def _iter_pem_blocks(text: str) -> Iterator[tuple[str, str, int]]:
+    """Yield ``(label, body, start_index)`` for every well-formed PEM block.
+
+    An END marker closes the most recent BEGIN with the same label, so a
+    concatenated certificate chain yields one block per certificate and an
+    unterminated BEGIN simply never yields. Labels that never pair are dropped.
+    """
+    pending: dict[str, tuple[int, int]] = {}
+    for match in _PEM_BOUNDARY_RE.finditer(text):
+        kind, label = match.group(1), match.group(2).strip()
+        if kind == "BEGIN":
+            pending[label] = (match.end(), match.start())
+        else:
+            entry = pending.pop(label, None)
+            if entry is not None:
+                body_start, begin_index = entry
+                yield label, text[body_start : match.start()], begin_index
+
+
 def _decode_pem_body(body: str) -> Optional[bytes]:
     """Base64-decode a PEM body, tolerating RFC 1421 headers and escaped newlines."""
     cleaned = _PEM_HEADER_RE.sub("", body)
@@ -710,8 +732,25 @@ def _signature_algorithm(algid: asn1.Node) -> tuple[Optional[str], Optional[str]
     return entry
 
 
-def _position(text: str, index: int) -> tuple[int, int]:
+def _line_starts(text: str) -> list[int]:
+    """Offsets at which each line begins, built once per file.
+
+    Resolving a position by counting newlines from byte 0 is O(offset), so
+    doing it per match is quadratic in a file with many matches — the same
+    trap the PEM boundary scan avoids. One index plus a binary search per
+    match keeps the whole pass linear.
+    """
+    starts = [0]
+    index = text.find("\n")
+    while index != -1:
+        starts.append(index + 1)
+        index = text.find("\n", index + 1)
+    return starts
+
+
+def _position(text: str, index: int, starts: Optional[list[int]] = None) -> tuple[int, int]:
     """1-based (line, column) of *index* in *text*."""
-    line = text.count("\n", 0, index) + 1
-    line_start = text.rfind("\n", 0, index) + 1
-    return line, index - line_start + 1
+    if starts is None:
+        starts = _line_starts(text)
+    line = bisect.bisect_right(starts, index)
+    return line, index - starts[line - 1] + 1

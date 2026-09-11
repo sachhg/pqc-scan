@@ -284,3 +284,71 @@ def test_findings_carry_key_specific_migration_guidance():
 
 def test_every_private_key_fixture_has_a_description():
     assert all(desc for desc, _ in PRIVATE_KEYS.values())
+
+
+# --------------------------------------------------------------------------- #
+# Pathological inputs — a scanner runs on repositories it does not control
+# --------------------------------------------------------------------------- #
+
+
+def test_many_unterminated_pem_headers_stay_linear(tmp_path):
+    """Pairing BEGIN/END in one pass instead of matching the body with a regex.
+
+    A backreferenced `.*?` body makes every unterminated BEGIN scan to end of
+    file. This input took ~39 seconds that way; the bound is deliberately loose
+    so it survives a slow CI runner while still catching a return to quadratic.
+    """
+    import time
+
+    path = tmp_path / "flood.pem"
+    path.write_text("-----BEGIN CERTIFICATE-----\n" * 20000, encoding="utf-8")
+    started = time.perf_counter()
+    assert _scan(path) == []
+    assert time.perf_counter() - started < 5.0
+
+
+def test_many_small_pem_blocks_stay_linear(tmp_path):
+    """Resolving each block's line by counting newlines from byte 0 is the same
+    quadratic trap; the line index has to be built once per file."""
+    import time
+
+    path = tmp_path / "many.pem"
+    path.write_text(
+        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n" * 20000,
+        encoding="utf-8",
+    )
+    started = time.perf_counter()
+    assert _scan(path) == []
+    assert time.perf_counter() - started < 5.0
+
+
+def test_many_ssh_public_keys_report_correct_line_numbers(tmp_path):
+    entry = (KEYS / "id_rsa.pub").read_text(encoding="utf-8").strip()
+    path = tmp_path / "authorized_keys"
+    path.write_text("".join(f"host{i}.example.com {entry}\n" for i in range(200)),
+                    encoding="utf-8")
+    findings = _scan(path)
+    assert len(findings) == 200
+    assert [f.line_number for f in findings] == list(range(1, 201))
+
+
+def test_an_unterminated_block_does_not_hide_the_next_valid_one(tmp_path):
+    path = tmp_path / "mixed.pem"
+    path.write_text(
+        "-----BEGIN CERTIFICATE-----\ntruncated, no END marker\n\n"
+        + (KEYS / "cert_rsa_sha256.crt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    assert [f.rule_id for f in _scan(path)] == ["PQC016"]
+
+
+def test_a_certificate_chain_yields_one_finding_per_certificate(tmp_path):
+    path = tmp_path / "chain.pem"
+    path.write_text(
+        (KEYS / "cert_rsa_sha256.crt").read_text(encoding="utf-8")
+        + (KEYS / "cert_ec_p256.crt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    findings = _scan(path)
+    assert [f.algorithm for f in findings] == ["RSA-2048", "ECDSA-P-256"]
+    assert findings[1].line_number > findings[0].line_number
