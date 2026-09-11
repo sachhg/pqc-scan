@@ -1,0 +1,5 @@
+# Fixture: a quantum-safe Gemfile. MUST yield zero findings.
+source "https://rubygems.org"
+
+gem "rails", "~> 7.1"
+gem "puma"

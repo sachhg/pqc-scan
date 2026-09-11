@@ -1,0 +1,14 @@
+# Fixture: a quantum-safe Rust manifest. MUST yield zero findings.
+[package]
+name = "safe-app"
+version = "0.1.0"
+
+[dependencies]
+serde = "1"
+tokio = "1"
+sha2 = "0.10"
+sha3 = "0.10"
+aes-gcm = "0.10"
+hmac = "0.12"
+ml-kem = "0.2"
+ml-dsa = "0.0.4"

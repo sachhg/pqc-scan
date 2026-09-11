@@ -1,0 +1,22 @@
+# Fixture: Rust manifest declaring quantum-vulnerable crates (PQC014).
+[package]
+name = "fixture-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+rsa = "0.9"
+p256 = "0.13"
+ed25519-dalek = "2"
+x25519-dalek = "2"
+sha2 = "0.10"
+aes-gcm = "0.10"
+digest = { version = "0.10", package = "md-5" }
+
+[dev-dependencies]
+sha1 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+openssl = "0.10"

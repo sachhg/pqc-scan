@@ -1,0 +1,11 @@
+// Fixture: Gradle build declaring quantum-vulnerable dependencies (PQC014).
+plugins {
+    id 'java'
+}
+
+dependencies {
+    implementation 'com.google.guava:guava:33.2.0-jre'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.78'
+    implementation "io.jsonwebtoken:jjwt-api:0.12.5"
+    testImplementation group: 'com.jcraft', name: 'jsch', version: '0.1.55'
+}

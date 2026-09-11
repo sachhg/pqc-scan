@@ -1,0 +1,12 @@
+{
+  "name": "example/fixture-app",
+  "require": {
+    "php": ">=8.2",
+    "monolog/monolog": "^3.0",
+    "phpseclib/phpseclib": "^3.0",
+    "firebase/php-jwt": "^6.10"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  }
+}
