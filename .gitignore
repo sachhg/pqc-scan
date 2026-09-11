@@ -12,3 +12,4 @@ coverage.xml
 *.sarif
 cbom.json
 .DS_Store
+CLAUDE.md
