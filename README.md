@@ -85,7 +85,7 @@ This installs the `pqc-scan` console script. Verify:
 
 ```bash
 pqc-scan --version
-# pqc-scan 0.2.0
+# pqc-scan 0.2.1
 ```
 
 For development (tests + coverage):
@@ -484,7 +484,7 @@ pqc-scan scan . -o sarif -f pqc-scan.sarif
   "version": "2.1.0",
   "runs": [
     {
-      "tool": { "driver": { "name": "pqc-scan", "version": "0.2.0", "rules": [ ... ] } },
+      "tool": { "driver": { "name": "pqc-scan", "version": "0.2.1", "rules": [ ... ] } },
       "results": [ ... ]
     }
   ]
@@ -555,7 +555,7 @@ pqc-scan scan . -o json | jq '.findings[] | {rule_id, severity, file_path, line_
 ```json
 {
   "tool": "pqc-scan",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "generated_at": "2026-07-06T12:00:00Z",
   "paths": ["/repo"],
   "summary": {
@@ -812,7 +812,7 @@ the migration guidance attached to each finding as your remediation checklist.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md). The current release is **0.2.0**.
+See [CHANGELOG.md](CHANGELOG.md). The current release is **0.2.1**.
 
 ---
 

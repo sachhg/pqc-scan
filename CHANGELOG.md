@@ -4,6 +4,46 @@ All notable changes to `pqc-scan` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-11
+
+Bug fixes found by adversarially probing the 0.2.0 surface. All four were
+reachable from ordinary use, and two failed silently.
+
+### Fixed
+
+- **A suppression directive on the closing line of a multi-line call did
+  nothing.** Directives were matched against a finding's first line only, so the
+  idiomatic placement — a trailing `# pqc-scan: ignore` after a multi-line
+  `rsa.generate_private_key(...)` — had no effect. Findings now carry
+  `end_line_number` and a directive anywhere in the span counts. Measured over
+  the fixture corpus, 177 of 180 findings are single-line and the largest spans
+  5 lines, so the widened match cannot swallow unrelated code. SARIF gained
+  `endLine` for multi-line findings as a result, so GitHub highlights the whole
+  construct.
+- **A package name quoted in a `requirements.txt` comment was reported as a
+  declared dependency** (`requests==2.31.0  # replaces 'rsa' eventually` →
+  `PQC014 rsa`). The quoted-name scan exists for `setup.py` and `Pipfile`, where
+  names really are string literals; `requirements*.txt` now reads the line-start
+  name only and skips pip options and includes.
+- **A snippet containing a backtick run escaped its Markdown code block.**
+  `hashlib.md5(b"```")` is valid Python and would spill the snippet — and
+  everything after it — into the surrounding document, corrupting a whole PR
+  comment. Fences are now sized to beat the content, the `<details>` summary is
+  HTML-escaped, and table cells strip carriage returns.
+- **Quadratic blowup on files with many PEM markers.** An unterminated `BEGIN`
+  made the block regex scan to end of file, and `_position` counted newlines
+  from byte 0 per match. 0.56 MB of bare `BEGIN` lines took ~39 seconds — well
+  within the walker's 2 MB limit, so a single file could stall a CI run.
+  Markers are now paired in one linear pass and line starts are indexed once per
+  file: **39s → 0.014s**, and a 500-certificate chain or 5,000 SSH public keys
+  now scan in ~0.05s.
+
+### Added
+
+- A PyPI trusted-publishing workflow: the build job validates the distribution,
+  smoke-tests the wheel in a clean venv, and refuses a tag that disagrees with
+  the version in `pyproject.toml`.
+
 ## [0.2.0] — 2026-09-10
 
 The theme of this release is **making a scan livable in a real repository**:
