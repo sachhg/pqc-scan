@@ -1,0 +1,97 @@
+# Build the distribution and publish it to PyPI.
+#
+# Uses PyPI **Trusted Publishing** (OIDC), so there is no API token to paste or
+# rotate. One-time setup, on https://pypi.org/manage/project/pqc-scan/settings/publishing/:
+#
+#   Owner:            sachhg
+#   Repository:       pqc-scan
+#   Workflow name:    publish.yml
+#   Environment name: pypi
+#
+# Until that publisher exists, the `publish` job fails with an auth error and
+# nothing is uploaded — the `build` job still validates the artifacts, so a
+# release is never silently broken.
+#
+# Triggers:
+#   * publishing a GitHub release  -> builds and publishes that tag
+#   * manual run (workflow_dispatch) -> builds, and publishes only if asked
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to PyPI (otherwise build and validate only)."
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build and validate the distribution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Verify the version matches the tag
+        # A tag that disagrees with pyproject would publish the wrong version
+        # under the right name, which cannot be undone on PyPI.
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c "import re,pathlib;print(re.search(r'^version = \"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches version $version"
+
+      - name: Smoke-test the built wheel
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/wheeltest
+          /tmp/wheeltest/bin/pip install --quiet dist/*.whl
+          /tmp/wheeltest/bin/pqc-scan --version
+          /tmp/wheeltest/bin/pqc-scan rules --json > /dev/null
+          /tmp/wheeltest/bin/pqc-scan scan tests/fixtures -s low -o json -f /dev/null
+
+      - name: Upload the distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release' || inputs.publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pqc-scan
+    permissions:
+      # Required for trusted publishing; no PyPI token is stored anywhere.
+      id-token: write
+    steps:
+      - name: Download the distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
