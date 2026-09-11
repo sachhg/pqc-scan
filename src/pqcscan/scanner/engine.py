@@ -56,6 +56,9 @@ class ScanResult:
     #: ``findings`` (so they do not gate CI) but still reported, so a waiver is
     #: visible in the console summary, in JSON, and as a SARIF suppression.
     suppressed: list[Finding] = field(default_factory=list)
+    #: Pre-existing findings matched by a baseline file. Also kept out of
+    #: ``findings`` so only *new* crypto gates the build.
+    baselined: list[Finding] = field(default_factory=list)
 
     def counts_by_severity(self) -> dict[str, int]:
         counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -71,6 +74,20 @@ class ScanResult:
     @property
     def suppressed_count(self) -> int:
         return len(self.suppressed)
+
+    @property
+    def baselined_count(self) -> int:
+        return len(self.baselined)
+
+    def all_findings(self) -> list[Finding]:
+        """Every finding the scan produced, reported or not, in sort order.
+
+        Inventory outputs (CBOM) use this: a waived or pre-existing algorithm is
+        still part of the migration surface.
+        """
+        return sorted(
+            [*self.findings, *self.suppressed, *self.baselined], key=finding_sort_key
+        )
 
 
 def extensions_for_languages(languages: Iterable[str]) -> set[str]:
@@ -170,10 +187,21 @@ def run_scan(
     if config.honor_suppressions:
         filtered, suppressed = partition_suppressed(filtered)
 
+    # Split off findings a baseline already accepted, so only new crypto gates
+    # the build. A baseline that cannot be read is a hard error at the CLI
+    # boundary, never a silent "everything is new".
+    baselined: list[Finding] = []
+    if config.baseline_path:
+        from pqcscan.baseline import Baseline
+
+        loaded = Baseline.load(config.baseline_path)
+        filtered, baselined = loaded.partition(filtered)
+
     # Attach library-implementation context hints (path heuristic) to findings
     # the language analyzers did not already annotate.
     apply_context_hints(filtered)
     apply_context_hints(suppressed)
+    apply_context_hints(baselined)
 
     return ScanResult(
         findings=filtered,
@@ -184,6 +212,7 @@ def run_scan(
         root_path=root_path,
         scanned_paths=[str(p) for p in path_list],
         suppressed=suppressed,
+        baselined=baselined,
     )
 
 

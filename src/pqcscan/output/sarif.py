@@ -178,7 +178,9 @@ def to_sarif(result: ScanResult, *, base_path: str = ".") -> dict[str, Any]:
                     _result(f, rule_index, base_path, result.root_path)
                     # Suppressed findings are emitted too, carrying a SARIF
                     # `suppressions` entry (see _result), so nothing silently
-                    # disappears from code scanning.
+                    # disappears from code scanning. Baselined findings are NOT:
+                    # the point of a baseline is that pre-existing debt stops
+                    # annotating pull requests.
                     for f in sorted(
                         [*result.findings, *result.suppressed], key=finding_sort_key
                     )

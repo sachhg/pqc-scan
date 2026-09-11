@@ -245,8 +245,13 @@ class ConsoleReporter:
         line.append(" |  ", style="dim")
         line.append("Total findings: ", style="bold")
         line.append(str(result.total), style="bold")
+        extra = []
         if result.suppressed:
-            line.append(f"   (+{len(result.suppressed)} suppressed)", style="dim")
+            extra.append(f"{len(result.suppressed)} suppressed")
+        if result.baselined:
+            extra.append(f"{len(result.baselined)} baselined")
+        if extra:
+            line.append(f"   (+{', '.join(extra)})", style="dim")
         console.print(line)
 
         meta = Text("  ")

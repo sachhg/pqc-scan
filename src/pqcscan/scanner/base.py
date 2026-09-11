@@ -98,6 +98,9 @@ class Finding:
     suppressed: bool = False
     #: Human-readable description of the directive that suppressed it.
     suppression_reason: Optional[str] = None
+    #: True when a baseline file already recorded this finding (pre-existing
+    #: debt). Baselined findings are reported separately and do not gate CI.
+    baselined: bool = False
 
     # ----- convenience helpers -------------------------------------------- #
 

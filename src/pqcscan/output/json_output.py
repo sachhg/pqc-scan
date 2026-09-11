@@ -34,6 +34,7 @@ def to_json(result: ScanResult, *, indent: int = 2, generated_at: Optional[str] 
             "files_scanned": result.files_scanned,
             "duration_seconds": round(result.duration_seconds, 4),
             "suppressed": len(result.suppressed),
+            "baselined": len(result.baselined),
             "errors": result.errors,
         },
         "findings": findings_to_list(result),
@@ -41,6 +42,9 @@ def to_json(result: ScanResult, *, indent: int = 2, generated_at: Optional[str] 
         # array so consumers that gate on `findings` are unaffected, while an
         # audit can still see (and justify) every waiver.
         "suppressed_findings": [f.to_dict() for f in result.suppressed],
+        # Pre-existing findings accepted by a baseline file. Separate from
+        # `findings` so CI gates on new crypto only, while the debt stays visible.
+        "baselined_findings": [f.to_dict() for f in result.baselined],
     }
     return json.dumps(payload, indent=indent)
 

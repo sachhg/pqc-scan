@@ -3,6 +3,7 @@
 Commands:
   scan [PATH]   scan a path and emit console / SARIF / CBOM / JSON
   report        run a scan over a path and write a report file (CBOM/SARIF/JSON)
+  baseline      snapshot current findings so CI gates on new ones only
   init          write a starter .pqcscan.yml
   rules         list every detection rule
 """
@@ -19,6 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from pqcscan import __version__
+from pqcscan.baseline import DEFAULT_BASELINE_NAME, Baseline, BaselineError
 from pqcscan.config import ConfigError, PqcConfig
 from pqcscan.output import cbom as cbom_out
 from pqcscan.output import json_output
@@ -96,6 +98,32 @@ def _validate_choice(value: str, choices: tuple[str, ...], label: str) -> str:
     return value
 
 
+def _resolve_baseline(cfg: PqcConfig, baseline: Optional[str], no_baseline: bool) -> None:
+    """Fold the --baseline / --no-baseline flags into *cfg* in place.
+
+    An explicitly requested baseline that does not exist is an error: silently
+    treating every finding as new would turn a green build red for the wrong
+    reason (and vice versa once someone "fixes" it by deleting the file).
+    """
+    if no_baseline:
+        cfg.baseline_path = None
+        return
+    if baseline is None:
+        return
+    if not Path(baseline).is_file():
+        _err_console.print(f"[red]Baseline file not found: {baseline}[/red]")
+        raise typer.Exit(2)
+    cfg.baseline_path = baseline
+
+
+def _load_baseline_or_exit(path: str | Path) -> Baseline:
+    try:
+        return Baseline.load(path)
+    except BaselineError as exc:
+        _err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+
 def _render_output(result: ScanResult, fmt: str, base_path: str) -> str:
     if fmt == "sarif":
         return sarif_out.to_sarif_json(result, base_path=base_path)
@@ -153,6 +181,14 @@ def scan(
         False, "--show-suppressed",
         help="Console output: also list findings waived by an inline ignore directive.",
     ),
+    baseline: Optional[str] = typer.Option(
+        None, "--baseline",
+        help="Baseline file of accepted findings; report only what is new.",
+    ),
+    no_baseline: bool = typer.Option(
+        False, "--no-baseline",
+        help="Ignore any baseline configured in .pqcscan.yml.",
+    ),
 ) -> None:
     """Scan PATH for quantum-vulnerable cryptography."""
     _require_config_exists(config)
@@ -169,6 +205,7 @@ def scan(
         cfg.severity_threshold = _validate_choice(severity, _VALID_SEVERITIES, "severity")
     if no_suppress:
         cfg.honor_suppressions = False
+    _resolve_baseline(cfg, baseline, no_baseline)
 
     # Explicit --output wins; otherwise fall back to the config's default format.
     chosen = output or (cfg.default_format if cfg.default_format in _VALID_SCAN_FORMATS else "console")
@@ -184,13 +221,17 @@ def scan(
             )
 
     base_path = os.getcwd()
-    result = timed_scan(
-        [scan_root],
-        cfg,
-        changed_only=changed_only,
-        repo_root=scan_root if Path(scan_root).is_dir() else ".",
-        extra_excludes=list(exclude),
-    )
+    try:
+        result = timed_scan(
+            [scan_root],
+            cfg,
+            changed_only=changed_only,
+            repo_root=scan_root if Path(scan_root).is_dir() else ".",
+            extra_excludes=list(exclude),
+        )
+    except BaselineError as exc:
+        _err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
 
     if fmt == "console":
         render_opts = dict(
@@ -250,6 +291,66 @@ def report(
     )
 
 
+@app.command()
+def baseline(
+    path: str = typer.Argument(".", help="File or directory to scan."),
+    output_file: Optional[str] = typer.Option(
+        None, "--output-file", "-f",
+        help=f"Baseline file to write (default: {DEFAULT_BASELINE_NAME} in PATH).",
+    ),
+    severity: Optional[str] = typer.Option(
+        None, "--severity", "-s", help="Minimum severity to record in the baseline.",
+    ),
+    exclude: List[str] = typer.Option(
+        [], "--exclude", help="Glob pattern to exclude (repeatable).",
+    ),
+    config: Optional[str] = typer.Option(
+        None, "--config", help="Path to a .pqcscan.yml config file.",
+    ),
+) -> None:
+    """Snapshot the current findings so later scans report only new ones.
+
+    Commit the generated file; then run `pqc-scan scan . --baseline <file>
+    --fail-on-findings` in CI to gate on newly introduced crypto while the
+    existing debt stays visible but non-blocking.
+    """
+    _require_config_exists(config)
+    _require_path_exists(path)
+    scan_root = str(Path(path).resolve())
+    cfg = _load_config(config, scan_root)
+    if severity is not None:
+        cfg.severity_threshold = _validate_choice(severity, _VALID_SEVERITIES, "severity")
+    # A baseline records the raw state of the tree: an existing baseline must not
+    # filter what the new one captures, or regenerating would empty it out.
+    cfg.baseline_path = None
+
+    target = Path(output_file) if output_file else Path(path) / DEFAULT_BASELINE_NAME
+    previous = _load_baseline_or_exit(target) if target.is_file() else None
+
+    result = timed_scan([scan_root], cfg, extra_excludes=list(exclude))
+    # Inline-suppressed findings are already waived at the source; recording them
+    # again in the baseline would double-count the same acceptance.
+    snapshot = Baseline.from_findings(
+        result.findings, base_dir=str(target.resolve().parent)
+    )
+    snapshot.write(target)
+
+    _err_console.print(
+        f"[green]Wrote baseline to {target}[/green] "
+        f"({snapshot.total} finding(s) across {result.files_scanned} file(s) scanned)."
+    )
+    if previous is not None:
+        added, removed = snapshot.diff(previous)
+        _err_console.print(
+            f"[dim]Since the previous baseline: {added} new, {removed} resolved.[/dim]"
+        )
+    if result.suppressed:
+        _err_console.print(
+            f"[dim]{len(result.suppressed)} inline-suppressed finding(s) were not "
+            "recorded (they are already waived in-source).[/dim]"
+        )
+
+
 _DEFAULT_CONFIG_TEMPLATE = """\
 # .pqcscan.yml — configuration for pqc-scan
 # Docs: https://github.com/pqc-scan/pqc-scan
@@ -271,6 +372,13 @@ languages:
 
 scan_configs: true        # Scan YAML/JSON/TOML/.conf config files
 scan_dependencies: true   # Scan dependency manifests (requirements.txt, package.json, ...)
+
+# Honor inline "pqc-scan: ignore" directives (set false for an audit run).
+suppressions: true
+
+# Path to a baseline of accepted findings, relative to this file. Generate it
+# with `pqc-scan baseline`; later scans then report only NEW findings.
+# baseline: .pqcscan-baseline.json
 
 rules:
   disable: []             # e.g. [PQC010] to silence a specific rule

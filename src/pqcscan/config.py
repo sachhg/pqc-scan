@@ -44,6 +44,9 @@ class PqcConfig:
     #: must see waived findings too.
     honor_suppressions: bool = True
     disabled_rules: set[str] = field(default_factory=set)
+    #: Path to a baseline file whose findings are treated as accepted debt.
+    #: ``None`` disables baselining entirely (no auto-discovery).
+    baseline_path: Optional[str] = None
     default_format: str = "console"
     cbom_path: str = "cbom.json"
     #: Path the config was loaded from (None when using built-in defaults).
@@ -82,6 +85,12 @@ class PqcConfig:
             cfg.scan_dependencies = bool(data["scan_dependencies"])
         if "suppressions" in data:
             cfg.honor_suppressions = bool(data["suppressions"])
+        if data.get("baseline"):
+            # Relative to the config file, so the same config works from any cwd.
+            raw = str(data["baseline"])
+            if source_path and not Path(raw).is_absolute():
+                raw = str(Path(source_path).parent / raw)
+            cfg.baseline_path = raw
 
         rules = data.get("rules") or {}
         if isinstance(rules, dict) and isinstance(rules.get("disable"), list):
