@@ -17,12 +17,13 @@ from pqcscan.languages import (
     java_rules,
     javascript_rules,
     python_rules,
+    rust_rules,
 )
 
 from .base import BaseScanner, Finding, ScanContext
 
 # Order matters only for readability; lookup is by extension.
-_LANGUAGE_MODULES = [python_rules, javascript_rules, java_rules, go_rules]
+_LANGUAGE_MODULES = [python_rules, javascript_rules, java_rules, go_rules, rust_rules]
 
 
 class _LanguageEntry:

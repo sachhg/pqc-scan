@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from pqcscan.config import ALL_LANGUAGES, PqcConfig
-from pqcscan.languages import go_rules, java_rules, javascript_rules, python_rules
+from pqcscan.languages import (
+    go_rules,
+    java_rules,
+    javascript_rules,
+    python_rules,
+    rust_rules,
+)
 from pqcscan.utils.file_walker import discover_files
 
 from .ast_scanner import AstScanner
@@ -36,7 +42,8 @@ from .dependency_scanner import DependencyScanner
 from .suppressions import parse_suppressions
 
 _LANG_MODULES = {
-    m.LANGUAGE: m for m in (python_rules, javascript_rules, java_rules, go_rules)
+    m.LANGUAGE: m
+    for m in (python_rules, javascript_rules, java_rules, go_rules, rust_rules)
 }
 
 

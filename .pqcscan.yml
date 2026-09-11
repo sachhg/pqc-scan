@@ -19,6 +19,7 @@ languages:
   - javascript
   - java
   - go
+  - rust
 
 scan_configs: true        # Scan YAML/JSON/TOML/.conf config files
 scan_dependencies: true   # Scan dependency manifests (requirements.txt, package.json, ...)

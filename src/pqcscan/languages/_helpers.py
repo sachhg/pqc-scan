@@ -80,6 +80,8 @@ def dotted_parts(node) -> list[str]:
     ``rsa.generate_private_key``        -> ``["rsa", "generate_private_key"]``
     ``paramiko.RSAKey.generate``        -> ``["paramiko", "RSAKey", "generate"]``
     ``ec.SECP384R1()`` (call as object) -> ``["ec", "SECP384R1"]``
+    ``p256::ecdsa::SigningKey::random`` -> ``["p256", "ecdsa", "SigningKey", "random"]``
+    ``SigningKey::<Sha256>::new``       -> ``["SigningKey", "new"]``
 
     Returns ``[]`` when the access cannot be resolved to plain identifiers.
     """
@@ -91,7 +93,10 @@ def dotted_parts(node) -> list[str]:
         "type_identifier", "package_identifier",
     ):
         return [text(node)]
-    if ntype in ("attribute", "member_expression", "selector_expression", "field_access"):
+    if ntype in (
+        "attribute", "member_expression", "selector_expression",
+        "field_access", "field_expression",
+    ):
         obj = (
             field(node, "object")
             or field(node, "operand")
@@ -111,6 +116,14 @@ def dotted_parts(node) -> list[str]:
         return dotted_parts(obj) + dotted_parts(attr)
     if ntype in ("call", "call_expression", "method_invocation"):
         return dotted_parts(call_function(node))
+    # Rust generics: the type arguments are not part of the path, so
+    # ``SigningKey::<Sha256>`` and ``Oaep::new::<Sha256>`` reduce to the
+    # underlying path and match the same registry entries as the bare form.
+    if ntype in ("generic_type", "generic_function"):
+        inner = field(node, "type") or field(node, "function")
+        if inner is None:
+            inner = next((c for c in node.children if c.is_named), None)
+        return dotted_parts(inner)
     # Java a.b.C / Go pkg.Type — qualified names built from named children.
     if ntype in ("scoped_identifier", "scoped_type_identifier", "qualified_type"):
         named = [c for c in node.children if c.is_named]
@@ -125,7 +138,9 @@ def string_value(node) -> Optional[str]:
     """Inner text of a string literal node, or ``None`` if *node* is not a string."""
     if node is None:
         return None
-    if node.type in ("string", "interpreted_string_literal", "raw_string_literal"):
+    if node.type in (
+        "string", "interpreted_string_literal", "raw_string_literal", "string_literal",
+    ):
         # Prefer an explicit content child; otherwise strip surrounding quotes.
         for child in node.children:
             if child.type in ("string_content", "string_fragment"):

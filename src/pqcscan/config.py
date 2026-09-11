@@ -11,7 +11,7 @@ import yaml
 from pqcscan.scanner.base import SEVERITY_LOW
 
 DEFAULT_CONFIG_NAMES = (".pqcscan.yml", ".pqcscan.yaml", "pqcscan.yml")
-ALL_LANGUAGES = ["python", "javascript", "java", "go"]
+ALL_LANGUAGES = ["python", "javascript", "java", "go", "rust"]
 
 _VALID_SEVERITIES = ("critical", "high", "medium", "low")
 
