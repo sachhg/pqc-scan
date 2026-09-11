@@ -1,16 +1,18 @@
 # PQC Scan — composite GitHub Action
 #
-# Scans a repository for quantum-vulnerable cryptography with pqc-scan,
-# emits SARIF, and uploads it to GitHub code scanning (Security tab).
+# Scans a repository for quantum-vulnerable cryptography with pqc-scan, writes a
+# Markdown summary to the job page, and uploads SARIF to GitHub code scanning so
+# findings land as inline annotations on the exact line.
 #
 # Usage in a workflow:
 #   - uses: actions/checkout@v4
+#     with:
+#       fetch-depth: 0        # only needed for changed-only
 #   - uses: ./            # or pqc-scan/pqc-scan@v1 once published
 #     with:
 #       path: .
 #       severity: medium
-#       output-sarif: pqc-scan.sarif
-#       fail-on-findings: false
+#       fail-on: high
 name: PQC Scan
 description: Detect quantum-vulnerable cryptography and upload results to GitHub code scanning.
 author: pqc-scan contributors
@@ -35,6 +37,49 @@ inputs:
     description: "Fail the job if any findings are reported (true/false)."
     required: false
     default: "false"
+  fail-on:
+    description: >
+      Fail the job only when a finding is at least this severe
+      (critical | high | medium | low). Leave empty to never fail on severity.
+      Combine with a lower `severity` to report everything but gate on the worst.
+    required: false
+    default: ""
+  changed-only:
+    description: >
+      Only scan files changed in this pull request. Requires
+      actions/checkout with fetch-depth: 0.
+    required: false
+    default: "false"
+  baseline:
+    description: >
+      Path to a baseline file of accepted findings (see `pqc-scan baseline`).
+      When set, only findings that are NOT in the baseline are reported.
+    required: false
+    default: ""
+  config:
+    description: Path to a .pqcscan.yml config file.
+    required: false
+    default: ""
+  job-summary:
+    description: "Write a Markdown report to the job summary page (true/false)."
+    required: false
+    default: "true"
+  upload-sarif:
+    description: "Upload the SARIF report to GitHub code scanning (true/false)."
+    required: false
+    default: "true"
+  python-version:
+    description: Python version used to run pqc-scan.
+    required: false
+    default: "3.12"
+
+outputs:
+  sarif-file:
+    description: Path of the SARIF report that was written.
+    value: ${{ inputs.output-sarif }}
+  total-findings:
+    description: Number of findings reported by the scan.
+    value: ${{ steps.scan.outputs.total }}
 
 runs:
   using: composite
@@ -42,7 +87,7 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: ${{ inputs.python-version }}
 
     - name: Install pqc-scan
       shell: bash
@@ -53,16 +98,57 @@ runs:
     - name: Run pqc-scan
       id: scan
       shell: bash
-      # Don't abort here — we still want to upload the SARIF below even when the
-      # scan exits non-zero (e.g. with --fail-on-findings). A later step
-      # re-enforces the failure if requested.
+      # Don't abort here — the SARIF upload and job summary must still run when
+      # the scan exits non-zero. A later step re-enforces the failure.
       continue-on-error: true
+      env:
+        PQC_PATH: ${{ inputs.path }}
+        PQC_SEVERITY: ${{ inputs.severity }}
+        PQC_SARIF: ${{ inputs.output-sarif }}
+        PQC_FAIL_ON: ${{ inputs.fail-on }}
+        PQC_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        PQC_CHANGED_ONLY: ${{ inputs.changed-only }}
+        PQC_BASELINE: ${{ inputs.baseline }}
+        PQC_CONFIG: ${{ inputs.config }}
+        # run_scan reads this to diff against the PR base when the working tree
+        # itself is clean (which it always is in CI).
+        GITHUB_BASE_REF: ${{ github.base_ref }}
       run: |
-        pqc-scan scan "${{ inputs.path }}" \
-          --severity "${{ inputs.severity }}" \
-          --output sarif \
-          --output-file "${{ inputs.output-sarif }}" \
-          ${{ inputs.fail-on-findings == 'true' && '--fail-on-findings' || '' }}
+        set -euo pipefail
+        args=("$PQC_PATH" --severity "$PQC_SEVERITY")
+        if [ "$PQC_CHANGED_ONLY" = "true" ]; then args+=(--changed-only); fi
+        if [ -n "$PQC_BASELINE" ]; then args+=(--baseline "$PQC_BASELINE"); fi
+        if [ -n "$PQC_CONFIG" ]; then args+=(--config "$PQC_CONFIG"); fi
+
+        # The CLI emits one format per run, so each artifact is its own scan.
+        # These two deliberately carry no fail flags: under `set -e` a non-zero
+        # exit would skip the remaining renders.
+        pqc-scan scan "${args[@]}" --output json     --output-file pqc-scan.json
+        pqc-scan scan "${args[@]}" --output markdown --output-file pqc-scan.md
+
+        total=$(python -c "import json;print(json.load(open('pqc-scan.json'))['summary']['total'])")
+        echo "total=$total" >> "$GITHUB_OUTPUT"
+        echo "pqc-scan reported $total finding(s)."
+
+        # The SARIF render runs last and carries the gate flags, so the CLI's own
+        # exit-code semantics decide the verdict (no duplicated threshold logic
+        # here). `scan` writes the output file before exiting non-zero, so the
+        # SARIF is on disk either way and the upload step below still runs.
+        gate=()
+        if [ -n "$PQC_FAIL_ON" ]; then gate+=(--fail-on "$PQC_FAIL_ON"); fi
+        if [ "$PQC_FAIL_ON_FINDINGS" = "true" ]; then gate+=(--fail-on-findings); fi
+        pqc-scan scan "${args[@]}" ${gate[@]+"${gate[@]}"} \
+          --output sarif --output-file "$PQC_SARIF"
+
+    - name: Write job summary
+      if: inputs.job-summary == 'true'
+      shell: bash
+      run: |
+        if [ -f pqc-scan.md ]; then
+          cat pqc-scan.md >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "pqc-scan produced no Markdown report." >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     - name: Check SARIF report exists
       id: sarif
@@ -75,14 +161,16 @@ runs:
         fi
 
     - name: Upload SARIF to code scanning
-      if: steps.sarif.outputs.exists == 'true'
+      if: inputs.upload-sarif == 'true' && steps.sarif.outputs.exists == 'true'
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ inputs.output-sarif }}
 
-    - name: Enforce failure on findings
-      if: inputs.fail-on-findings == 'true' && steps.scan.outcome == 'failure'
+    # The scan step runs with continue-on-error so the SARIF upload and job
+    # summary always happen; this re-raises whatever it decided.
+    - name: Enforce scan result
+      if: steps.scan.outcome == 'failure'
       shell: bash
       run: |
-        echo "::error::pqc-scan reported findings and fail-on-findings is enabled."
+        echo "::error::pqc-scan failed the build (see the scan step for details)."
         exit 1

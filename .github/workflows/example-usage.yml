@@ -17,9 +17,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # changed-only needs history to diff the PR against its base.
+          fetch-depth: 0
 
       - name: Run PQC Scan
         uses: ./
         with:
           severity: medium
-          fail-on-findings: false
+          changed-only: ${{ github.event_name == 'pull_request' }}
+          # In your own repo, add `fail-on: critical` (or `high`) here to block
+          # the PR on the worst findings while everything else still shows up as
+          # a code-scanning annotation and in the job summary. This repository
+          # deliberately ships vulnerable test fixtures, so it cannot gate on
+          # its own findings.
+          fail-on: ""

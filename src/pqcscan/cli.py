@@ -6,6 +6,7 @@ Commands:
   baseline      snapshot current findings so CI gates on new ones only
   init          write a starter .pqcscan.yml
   rules         list every detection rule
+  explain       show one rule in full, with its migration code example
 """
 
 from __future__ import annotations
@@ -24,9 +25,10 @@ from pqcscan.baseline import DEFAULT_BASELINE_NAME, Baseline, BaselineError
 from pqcscan.config import ConfigError, PqcConfig
 from pqcscan.output import cbom as cbom_out
 from pqcscan.output import json_output
+from pqcscan.output import markdown as markdown_out
 from pqcscan.output import sarif as sarif_out
 from pqcscan.output.console import GROUP_BY_CHOICES, ConsoleReporter
-from pqcscan.scanner.base import all_rules
+from pqcscan.scanner.base import RULES, all_rules, severity_rank
 from pqcscan.scanner.engine import ScanResult, timed_scan
 
 app = typer.Typer(
@@ -36,8 +38,8 @@ app = typer.Typer(
     add_completion=False,
 )
 
-_VALID_SCAN_FORMATS = ("console", "sarif", "cbom", "json")
-_VALID_REPORT_FORMATS = ("cbom", "sarif", "json")
+_VALID_SCAN_FORMATS = ("console", "sarif", "cbom", "json", "markdown")
+_VALID_REPORT_FORMATS = ("cbom", "sarif", "json", "markdown")
 _VALID_SEVERITIES = ("critical", "high", "medium", "low")
 
 _err_console = Console(stderr=True)
@@ -131,6 +133,8 @@ def _render_output(result: ScanResult, fmt: str, base_path: str) -> str:
         return cbom_out.to_cbom_json(result)
     if fmt == "json":
         return json_output.to_json(result)
+    if fmt == "markdown":
+        return markdown_out.to_markdown(result)
     raise ValueError(fmt)
 
 
@@ -139,7 +143,7 @@ def scan(
     path: str = typer.Argument(".", help="File or directory to scan."),
     output: Optional[str] = typer.Option(
         None, "--output", "-o",
-        help="Output format: console (default), sarif, cbom, json.",
+        help="Output format: console (default), sarif, cbom, json, markdown.",
     ),
     output_file: Optional[str] = typer.Option(
         None, "--output-file", "-f", help="Write output to this file instead of stdout.",
@@ -161,6 +165,11 @@ def scan(
     fail_on_findings: bool = typer.Option(
         False, "--fail-on-findings",
         help="Exit with code 1 if any findings are reported (for CI gating).",
+    ),
+    fail_on: Optional[str] = typer.Option(
+        None, "--fail-on",
+        help="Exit with code 1 only when a finding is at least this severe "
+        "(critical, high, medium, low). Report everything else without failing.",
     ),
     limit: int = typer.Option(
         0, "--limit", help="Show at most N findings in console output (0 = all).",
@@ -205,6 +214,8 @@ def scan(
         cfg.severity_threshold = _validate_choice(severity, _VALID_SEVERITIES, "severity")
     if no_suppress:
         cfg.honor_suppressions = False
+    if fail_on is not None:
+        fail_on = _validate_choice(fail_on, _VALID_SEVERITIES, "fail-on severity")
     _resolve_baseline(cfg, baseline, no_baseline)
 
     # Explicit --output wins; otherwise fall back to the config's default format.
@@ -261,6 +272,13 @@ def scan(
         else:
             typer.echo(rendered)
 
+    # --fail-on gates on severity; --fail-on-findings gates on any reported
+    # finding. Reporting at a low threshold while failing only on high findings
+    # is the normal CI shape, so the two compose rather than conflict.
+    if fail_on is not None:
+        threshold = severity_rank(fail_on)
+        if any(severity_rank(f.severity) >= threshold for f in result.findings):
+            raise typer.Exit(1)
     if fail_on_findings and result.findings:
         raise typer.Exit(1)
 
@@ -269,14 +287,14 @@ def scan(
 def report(
     path: str = typer.Argument(".", help="File or directory to scan."),
     format: str = typer.Option(
-        "cbom", "--format", help="Report format: cbom, sarif, json.",
+        "cbom", "--format", help="Report format: cbom, sarif, json, markdown.",
     ),
     output_file: str = typer.Option(
         ..., "--output-file", help="File to write the report to (required).",
     ),
     config: Optional[str] = typer.Option(None, "--config", help="Path to a .pqcscan.yml file."),
 ) -> None:
-    """Scan PATH and write a CBOM / SARIF / JSON report to a file."""
+    """Scan PATH and write a CBOM / SARIF / JSON / Markdown report to a file."""
     fmt = _validate_choice(format, _VALID_REPORT_FORMATS, "report format")
     _require_config_exists(config)
     _require_path_exists(path)
@@ -408,8 +426,34 @@ def init(
 
 
 @app.command()
-def rules() -> None:
+def rules(
+    json_output_flag: bool = typer.Option(
+        False, "--json", help="Emit the rule registry as JSON instead of a table.",
+    ),
+) -> None:
     """List all detection rules with their IDs and descriptions."""
+    if json_output_flag:
+        import json as _json
+
+        typer.echo(
+            _json.dumps(
+                [
+                    {
+                        "rule_id": rule.rule_id,
+                        "name": rule.name,
+                        "description": rule.description,
+                        "default_severity": rule.default_severity,
+                        "category": rule.category,
+                        "primitive": rule.primitive,
+                        "algorithm_family": rule.algorithm_family,
+                        "help_uri": rule.help_uri,
+                    }
+                    for rule in all_rules()
+                ],
+                indent=2,
+            )
+        )
+        return
     console = Console()
     table = Table(title="pqc-scan detection rules", title_style="bold", show_lines=False)
     table.add_column("ID", style="bold cyan", no_wrap=True)
@@ -428,6 +472,80 @@ def rules() -> None:
             rule.description,
         )
     console.print(table)
+
+
+@app.command()
+def explain(
+    rule_id: str = typer.Argument(..., help="Rule to explain, e.g. PQC001."),
+    json_output_flag: bool = typer.Option(
+        False, "--json", help="Emit the rule and its migration guidance as JSON.",
+    ),
+) -> None:
+    """Show one rule in full, including its before/after migration example.
+
+    Console and SARIF output have to stay terse, so the code example attached to
+    every finding is never shown in full there. This is where to read it.
+    """
+    from pqcscan.migration.suggestions import get_suggestion
+
+    key = rule_id.strip().upper()
+    rule = RULES.get(key)
+    if rule is None:
+        known = ", ".join(sorted(RULES))
+        _err_console.print(
+            f"[red]Unknown rule '{rule_id}'.[/red] Known rules: {known}"
+        )
+        raise typer.Exit(2)
+    suggestion = get_suggestion(rule.algorithm_family)
+
+    if json_output_flag:
+        import json as _json
+
+        typer.echo(
+            _json.dumps(
+                {
+                    "rule_id": rule.rule_id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "default_severity": rule.default_severity,
+                    "category": rule.category,
+                    "primitive": rule.primitive,
+                    "algorithm_family": rule.algorithm_family,
+                    "help_uri": rule.help_uri,
+                    "migration": suggestion.to_dict(),
+                },
+                indent=2,
+            )
+        )
+        return
+
+    console = Console()
+    sev_color = {"critical": "bold red", "high": "red", "medium": "yellow", "low": "cyan"}
+    console.print()
+    console.print(
+        f"[bold cyan]{rule.rule_id}[/]  [bold]{rule.name}[/]  "
+        f"[{sev_color.get(rule.default_severity, 'white')}]{rule.default_severity}[/]"
+        f"  [dim]({rule.category} · {rule.primitive})[/]"
+    )
+    console.print()
+    console.print(rule.description)
+    console.print()
+    console.print("[bold green]Migrate to[/]")
+    console.print(f"  {suggestion.recommended_algorithm}")
+    console.print(f"  [dim]{suggestion.nist_standard}[/]")
+    console.print()
+    console.print("[bold green]Library[/]")
+    console.print(f"  {suggestion.recommended_library}")
+    console.print()
+    console.print("[bold green]Why and how[/]")
+    console.print(f"  {suggestion.migration_description}")
+    console.print()
+    console.print("[bold green]Example[/]")
+    for line in suggestion.code_example.splitlines():
+        console.print(f"  [dim]{line}[/]")
+    console.print()
+    console.print(f"[blue underline]{suggestion.docs_url}[/]")
+    console.print()
 
 
 if __name__ == "__main__":  # pragma: no cover
