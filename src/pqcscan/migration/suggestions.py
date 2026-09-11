@@ -330,6 +330,53 @@ _DEPENDENCY = MigrationSuggestion(
 )
 
 
+_KEY_MATERIAL = MigrationSuggestion(
+    recommended_algorithm="ML-KEM-768 for key establishment, ML-DSA-65 (or SLH-DSA) "
+    "for signing keys",
+    recommended_library=_LIBOQS_INSTALL,
+    migration_description=(
+        "This is a stored key, not a call site: rewriting the code that uses it does "
+        "not retire the key. Inventory where the key is deployed and trusted, generate "
+        "a post-quantum (or hybrid) replacement, distribute the new public key to every "
+        "relying party, then revoke and destroy the old private key. Treat any key whose "
+        "protected data has a long confidentiality lifetime as already exposed to "
+        "harvest-now-decrypt-later capture."
+    ),
+    code_example=(
+        "# Inventory and rotate, in this order:\n"
+        "#   1. find every place this key is trusted (authorized_keys, truststores, JWKS)\n"
+        "#   2. generate the replacement:\n"
+        "#        ssh-keygen -t ssh-mldsa65  # OpenSSH >= 10 / hybrid-capable builds\n"
+        "#        python -c \"import oqs; oqs.Signature('ML-DSA-65').generate_keypair()\"\n"
+        "#   3. distribute the new public key, then revoke and delete the old private key"
+    ),
+    nist_standard="FIPS 203 (ML-KEM) / FIPS 204 (ML-DSA) / FIPS 205 (SLH-DSA)",
+    docs_url=_FIPS204,
+)
+
+_CERTIFICATE = MigrationSuggestion(
+    recommended_algorithm="ML-DSA-65 certificates (or a hybrid / composite "
+    "ECDSA+ML-DSA certificate during the transition)",
+    recommended_library=_LIBOQS_INSTALL,
+    migration_description=(
+        "Certificate chains migrate slowest, because every relying party has to accept "
+        "the new signature algorithm before you can issue with it. Start by inventorying "
+        "issuers, expiry dates and key algorithms, shorten certificate lifetimes so the "
+        "fleet can turn over quickly, and track your CA's timeline for ML-DSA and "
+        "composite certificates (IETF LAMPS). Certificates signed with SHA-1 or MD5 are "
+        "separately and immediately broken — replace those first."
+    ),
+    code_example=(
+        "# Inspect what you actually have:\n"
+        "openssl x509 -in cert.pem -noout -text | grep -E 'Signature Algorithm|Public Key'\n\n"
+        "# Track the post-quantum certificate profile work:\n"
+        "#   FIPS 204 (ML-DSA) + IETF LAMPS composite / hybrid certificate drafts"
+    ),
+    nist_standard="FIPS 204 (ML-DSA)",
+    docs_url=_FIPS204,
+)
+
+
 #: Algorithm family -> migration suggestion. ``build_finding`` looks up by the
 #: ``algorithm_family`` recorded on each rule.
 _SUGGESTIONS: dict[str, MigrationSuggestion] = {
@@ -349,6 +396,8 @@ _SUGGESTIONS: dict[str, MigrationSuggestion] = {
     "tls-config": _TLS_CONFIG,
     "des": _DES,
     "dependency": _DEPENDENCY,
+    "key-material": _KEY_MATERIAL,
+    "certificate": _CERTIFICATE,
 }
 
 # Generic fallback so an unmapped family never crashes finding construction.

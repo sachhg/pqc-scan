@@ -55,6 +55,8 @@ _CATEGORY_FUNCTIONS = {
     "encryption": ["encrypt", "decrypt"],
     "hashing": ["digest"],
     "key-exchange": ["keygen"],
+    "key-material": ["keygen"],
+    "certificate": ["sign", "verify"],
 }
 
 
@@ -94,6 +96,17 @@ def _oid_for(algorithm: str, family: str) -> Optional[str]:
         return _OIDS["md5"]
     if "3DES" in up:
         return _OIDS["3des"]
+    # Stored key material and certificates carry the algorithm in the name but a
+    # generic rule family ("key-material" / "certificate"), so resolve from the
+    # name before falling back to the family table.
+    if up.startswith("RSA"):
+        return _OIDS["rsa"]
+    if up.startswith(("ECDSA", "ECDH", "EC-")):
+        return _OIDS["ec"]
+    if up.startswith("DSA"):
+        return _OIDS["dsa"]
+    if up == "DH" or up.startswith("DH-"):
+        return _OIDS["dh"]
     return _FAMILY_OID.get(family)
 
 

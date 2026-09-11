@@ -2,6 +2,9 @@
 
 Routing priority per file is dependency-manifest -> AST source -> config file, so
 ``package.json`` is read as a manifest rather than scanned for cipher strings.
+The certificate scanner is additive rather than exclusive: a config file can both
+enable a weak cipher suite *and* inline a PEM private key, and a ``.pem`` file has
+no other owner. Every other file still gets exactly one scanner.
 
 Scanning is deliberately single-threaded. Measured on a 1,800-file tree the
 serial pipeline does ~1,700 files/s end-to-end, and ~75% of per-file cost is the
@@ -36,6 +39,7 @@ from .base import (
     meets_threshold,
     severity_rank,
 )
+from .certificate_scanner import CertificateScanner
 from .config_scanner import ConfigScanner
 from .context import apply_context_hints
 from .dependency_scanner import DependencyScanner
@@ -132,15 +136,22 @@ def run_scan(
     ast_scanner = AstScanner(context)
     config_scanner = ConfigScanner(context) if config.scan_configs else None
     dependency_scanner = DependencyScanner(context) if config.scan_dependencies else None
+    certificate_scanner = (
+        CertificateScanner(context) if config.scan_certificates else None
+    )
 
-    def route(path: Path):
+    def route(path: Path) -> list:
+        """Every scanner that should read *path* (primary first)."""
+        scanners = []
         if dependency_scanner is not None and dependency_scanner.supports(path):
-            return dependency_scanner
-        if path.suffix in allowed_exts and ast_scanner.supports(path):
-            return ast_scanner
-        if config_scanner is not None and config_scanner.supports(path):
-            return config_scanner
-        return None
+            scanners.append(dependency_scanner)
+        elif path.suffix in allowed_exts and ast_scanner.supports(path):
+            scanners.append(ast_scanner)
+        elif config_scanner is not None and config_scanner.supports(path):
+            scanners.append(config_scanner)
+        if certificate_scanner is not None and certificate_scanner.supports(path):
+            scanners.append(certificate_scanner)
+        return scanners
 
     excludes = list(config.exclude)
     if extra_excludes:
@@ -166,17 +177,18 @@ def run_scan(
     errors: list[str] = []
     files_scanned = 0
 
-    for path in discover_files(path_list, exclude=excludes, accept=lambda p: route(p) is not None):
+    for path in discover_files(path_list, exclude=excludes, accept=lambda p: bool(route(p))):
         if changed_set is not None and path.resolve() not in changed_set:
             continue
-        scanner = route(path)
-        if scanner is None:
+        scanners = route(path)
+        if not scanners:
             continue
         files_scanned += 1
-        try:
-            findings.extend(scanner.scan_file(path))
-        except Exception as exc:  # never let one bad file abort the run
-            errors.append(f"{path}: {exc}")
+        for scanner in scanners:
+            try:
+                findings.extend(scanner.scan_file(path))
+            except Exception as exc:  # never let one bad file abort the run
+                errors.append(f"{path}: {exc}")
 
     # A grammar that failed to import means a whole language was skipped —
     # surface that instead of silently reporting zero findings for it.

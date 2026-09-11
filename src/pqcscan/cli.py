@@ -373,6 +373,7 @@ languages:
 
 scan_configs: true        # Scan YAML/JSON/TOML/.conf config files
 scan_dependencies: true   # Scan dependency manifests (requirements.txt, package.json, ...)
+scan_certificates: true   # Scan PEM/OpenSSH keys and X.509 certificates (PQC015/PQC016)
 
 # Honor inline "pqc-scan: ignore" directives (set false for an audit run).
 suppressions: true

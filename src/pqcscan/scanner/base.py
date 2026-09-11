@@ -42,6 +42,8 @@ CATEGORY_HASHING = "hashing"
 CATEGORY_KEY_EXCHANGE = "key-exchange"
 CATEGORY_CONFIGURATION = "configuration"
 CATEGORY_DEPENDENCY = "dependency"
+CATEGORY_KEY_MATERIAL = "key-material"
+CATEGORY_CERTIFICATE = "certificate"
 
 
 def severity_rank(severity: str) -> int:
@@ -135,7 +137,7 @@ def finding_sort_key(finding: Finding) -> tuple:
 
 @dataclass(frozen=True)
 class RuleDef:
-    """Static metadata for a detection rule (PQC001 .. PQC014)."""
+    """Static metadata for a detection rule (PQC001 .. PQC016)."""
 
     rule_id: str
     name: str
@@ -287,6 +289,28 @@ RULES: dict[str, RuleDef] = {
         category=CATEGORY_DEPENDENCY,
         primitive="pke",
         algorithm_family="dependency",
+    ),
+    "PQC015": RuleDef(
+        rule_id="PQC015",
+        name="Quantum-Vulnerable Key Material",
+        description="A stored key (PEM/OpenSSH private or public key) whose algorithm is "
+        "broken by Shor's algorithm. Stored keys outlive the code that created them, so "
+        "they must be inventoried and rotated, not just rewritten in source.",
+        default_severity=SEVERITY_HIGH,
+        category=CATEGORY_KEY_MATERIAL,
+        primitive="pke",
+        algorithm_family="key-material",
+    ),
+    "PQC016": RuleDef(
+        rule_id="PQC016",
+        name="Quantum-Vulnerable Certificate",
+        description="An X.509 certificate or certificate request whose subject public key "
+        "or signature algorithm is quantum-vulnerable. Certificate chains are the slowest "
+        "part of a PQC migration because every relying party must accept the new algorithm.",
+        default_severity=SEVERITY_HIGH,
+        category=CATEGORY_CERTIFICATE,
+        primitive="signature",
+        algorithm_family="certificate",
     ),
 }
 

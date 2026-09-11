@@ -39,6 +39,8 @@ class PqcConfig:
     languages: list[str] = field(default_factory=lambda: list(ALL_LANGUAGES))
     scan_configs: bool = True
     scan_dependencies: bool = True
+    #: Scan PEM/OpenSSH key material and X.509 certificates (PQC015 / PQC016).
+    scan_certificates: bool = True
     #: Honor inline ``pqc-scan: ignore`` directives. Set false (config
     #: ``suppressions: false`` / CLI ``--no-suppress``) for an audit run that
     #: must see waived findings too.
@@ -83,6 +85,8 @@ class PqcConfig:
             cfg.scan_configs = bool(data["scan_configs"])
         if "scan_dependencies" in data:
             cfg.scan_dependencies = bool(data["scan_dependencies"])
+        if "scan_certificates" in data:
+            cfg.scan_certificates = bool(data["scan_certificates"])
         if "suppressions" in data:
             cfg.honor_suppressions = bool(data["suppressions"])
         if data.get("baseline"):
