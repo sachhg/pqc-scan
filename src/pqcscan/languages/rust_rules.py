@@ -98,7 +98,9 @@ _OPENSSL_CALLS = {
     ("Dh", "from_params"): ("PQC007", "DH"),
     ("MessageDigest", "sha1"): ("PQC009", "SHA-1"),
     ("MessageDigest", "md5"): ("PQC010", "MD5"),
-    ("Signer", "new"): (None, None),  # resolved via its MessageDigest argument
+    # No entry for Signer::new: its digest argument is itself a call
+    # (`MessageDigest::sha1()`) and is flagged on its own line, which points at
+    # the algorithm rather than at the generic signer.
 }
 
 # openssl Cipher constructors for DES / 3DES.
@@ -397,7 +399,7 @@ class _RustAnalyzer:
                 return True
             return False
         for (type_name, meth), (rule_id, algorithm) in _OPENSSL_CALLS.items():
-            if rule_id is None or meth != method or type_name not in tail:
+            if meth != method or type_name not in tail:
                 continue
             if rule_id == "PQC001":
                 bits = next(

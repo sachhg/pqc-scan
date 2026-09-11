@@ -179,3 +179,44 @@ def test_json_and_markdown_agree_on_totals():
         app, ["scan", str(FIXTURES / "vulnerable_rsa.py"), "-o", "markdown", "-s", "low"]
     )
     assert f"**{total}**" in as_md.stdout
+
+
+def test_a_snippet_containing_a_fence_does_not_escape_the_code_block(tmp_path):
+    """`hashlib.md5(b"```")` is valid Python; a fixed 3-backtick fence would be
+    closed by it, spilling the rest of the report into the surrounding page."""
+    src = tmp_path / "fence.py"
+    src.write_text('import hashlib\nh = hashlib.md5(b"```")\n', encoding="utf-8")
+    md = to_markdown(_result(src))
+    block = md[md.index("<details>"):]
+    fences = re.findall(r"^(`{3,})", block, re.M)
+    assert len(fences) == 2 and fences[0] == fences[1]
+    assert len(fences[0]) > 3, "the fence must be longer than the content's run"
+
+
+def test_the_fence_grows_with_the_longest_backtick_run(tmp_path):
+    src = tmp_path / "fence.py"
+    src.write_text('import hashlib\nh = hashlib.sha1(b"````x")\n', encoding="utf-8")
+    md = to_markdown(_result(src))
+    fences = re.findall(r"^(`{3,})", md[md.index("<details>"):], re.M)
+    assert all(len(f) == 5 for f in fences)
+
+
+def test_details_summary_escapes_html():
+    """The summary is raw HTML; an unescaped path or name would inject markup."""
+    result = _result()
+    for finding in result.findings:
+        finding.algorithm = "<b>RSA</b>"
+        finding.file_path = "src/<script>.py"
+    md = to_markdown(result, detail_limit=1)
+    summary = [l for l in md.splitlines() if l.startswith("<summary>")][0]
+    assert "<script>" not in summary
+    assert "&lt;script&gt;" in summary
+
+
+def test_carriage_returns_do_not_break_table_rows():
+    result = _result()
+    for finding in result.findings:
+        finding.algorithm = "RSA\r\n2048"
+    md = to_markdown(result, detail_limit=0)
+    for row in _table_rows(md):
+        assert "\r" not in row

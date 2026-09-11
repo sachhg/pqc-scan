@@ -14,7 +14,9 @@ exactly how many findings it left out rather than silently truncating.
 
 from __future__ import annotations
 
+import html
 import os
+import re
 from typing import Optional
 
 from pqcscan.scanner.base import RULES, Finding
@@ -42,7 +44,23 @@ _LANGUAGE_BY_SUFFIX = {
 
 def _escape_cell(value: str) -> str:
     """Escape the characters that would break a Markdown table cell."""
-    return value.replace("|", "\\|").replace("\n", " ").strip()
+    return value.replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
+
+
+_BACKTICK_RUN_RE = re.compile(r"`+")
+
+
+def _code_fence(content: str) -> str:
+    """A fence long enough to contain *content*.
+
+    Source snippets are arbitrary text and can legally contain a run of
+    backticks (``hashlib.md5(b"```")`` is valid Python). A fixed three-backtick
+    fence would be closed by that run, spilling the snippet — and everything
+    after it — into the surrounding document. CommonMark closes a fence only
+    with a run at least as long, so the fence is sized to beat the content.
+    """
+    longest = max((len(m.group(0)) for m in _BACKTICK_RUN_RE.finditer(content)), default=0)
+    return "`" * max(3, longest + 1)
 
 
 def _rel(path: str, result: ScanResult) -> str:
@@ -103,15 +121,17 @@ def _detail_block(finding: Finding, result: ScanResult) -> list[str]:
     rule = RULES.get(finding.rule_id)
     title = rule.name if rule else finding.rule_id
     location = f"{_rel(finding.file_path, result)}:{finding.line_number}"
+    # The summary is raw HTML, so its interpolated values must be escaped.
     lines = [
         "<details>",
-        f"<summary><code>{finding.rule_id}</code> · {title} — "
-        f"<code>{location}</code></summary>",
+        f"<summary><code>{html.escape(finding.rule_id)}</code> · {html.escape(title)} — "
+        f"<code>{html.escape(location)}</code></summary>",
         "",
     ]
     snippet = (finding.code_snippet or "").strip()
     if snippet:
-        lines += [f"```{_fence_language(finding.file_path)}", snippet, "```", ""]
+        fence = _code_fence(snippet)
+        lines += [f"{fence}{_fence_language(finding.file_path)}", snippet, fence, ""]
     lines += [finding.description, ""]
     migration = finding.migration_suggestion
     if migration:
