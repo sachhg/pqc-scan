@@ -185,3 +185,60 @@ def test_findings_name_the_ecosystem_in_the_description():
     findings = _scan(FIXTURES / "Cargo.toml")
     assert all("crates.io" in f.description for f in findings)
     assert all(f.migration_suggestion.recommended_algorithm for f in findings)
+
+
+# --------------------------------------------------------------------------- #
+# Comments and pip options are not declarations
+# --------------------------------------------------------------------------- #
+
+
+def test_a_quoted_name_in_a_requirements_comment_is_not_a_dependency(tmp_path):
+    """Prose about a dependency is not a declaration of one."""
+    path = _write(
+        tmp_path, "requirements.txt", "requests==2.31.0  # replaces 'rsa' eventually\n"
+    )
+    assert _scan(path) == []
+
+
+def test_requirements_comments_do_not_hide_real_declarations(tmp_path):
+    path = _write(
+        tmp_path, "requirements.txt", "ecdsa>=0.18.0\nrsa==4.9  # keep for now\n"
+    )
+    assert _names(_scan(path)) == {"ecdsa", "rsa"}
+
+
+def test_pip_options_and_includes_are_skipped(tmp_path):
+    path = _write(
+        tmp_path, "requirements.txt",
+        "-r base.txt\n-e .\n--index-url https://example.com/simple\nfoo==1.0\n",
+    )
+    assert _scan(path) == []
+
+
+def test_an_environment_marker_does_not_leak_quoted_values(tmp_path):
+    path = _write(
+        tmp_path, "requirements.txt", 'rsa==4.9 ; python_version < "3.12"\n'
+    )
+    assert _names(_scan(path)) == {"rsa"}
+
+
+def test_a_url_fragment_is_not_treated_as_a_comment(tmp_path):
+    """`#egg=` is part of the URL, so the line must still parse as `foo`."""
+    path = _write(
+        tmp_path, "requirements.txt", "foo @ https://example.com/pkg.zip#egg=ecdsa\n"
+    )
+    assert _scan(path) == []
+
+
+def test_setup_py_still_reads_quoted_install_requires(tmp_path):
+    """setup.py genuinely declares names as quoted strings — keep that scan."""
+    path = _write(
+        tmp_path, "setup.py",
+        'setup(install_requires=["rsa>=4.0", "ecdsa"])  # drop \'paramiko\' later\n',
+    )
+    assert _names(_scan(path)) == {"rsa", "ecdsa"}, "the comment must not contribute"
+
+
+def test_pipfile_packages_table(tmp_path):
+    path = _write(tmp_path, "Pipfile", '[packages]\nrsa = "*"\nrequests = "*"\n')
+    assert _names(_scan(path)) == {"rsa"}

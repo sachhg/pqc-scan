@@ -248,17 +248,53 @@ def _pep508_name(requirement: str) -> str:
     return re.split(r"[<>=!~;\[\s(]", requirement.strip(), maxsplit=1)[0]
 
 
-def _extract_python_text(text: str) -> list[str]:
+#: A comment runs to end of line, but only when it starts the line or follows
+#: whitespace — so a URL fragment (`...#egg=name`) is not treated as a comment.
+_COMMENT_RE = re.compile(r"(?:^|\s)#.*$")
+_QUOTED_NAME_RE = re.compile(r"['\"]([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _strip_comment(line: str) -> str:
+    return _COMMENT_RE.sub("", line)
+
+
+def _extract_requirements(text: str) -> list[str]:
+    """``requirements*.txt``: one requirement per line, nothing else.
+
+    Deliberately does NOT scan for quoted names. A package name quoted inside a
+    trailing comment ("# replaces 'rsa' eventually") is prose about a
+    dependency, not a declaration of one, and reporting it is a false positive
+    on a file whose grammar is unambiguous.
+    """
     names: list[str] = []
-    for line in text.splitlines():
+    for raw in text.splitlines():
+        line = _strip_comment(raw)
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        # pip options and includes (-r, -e, --index-url) declare nothing here.
+        if not stripped or stripped.startswith("-"):
             continue
-        m = _REQ_LINE_RE.match(line)
-        if m:
-            names.append(m.group(1))
-        # quoted names inside setup.py install_requires / Pipfile
-        names.extend(re.findall(r"['\"]([A-Za-z0-9][A-Za-z0-9._-]*)", stripped))
+        match = _REQ_LINE_RE.match(line)
+        if match:
+            names.append(match.group(1))
+    return names
+
+
+def _extract_python_source(text: str) -> list[str]:
+    """``setup.py`` / ``Pipfile``: names appear as quoted strings.
+
+    ``install_requires=["rsa>=4.0"]`` and a Pipfile ``[packages]`` table both
+    need the quoted scan, so it stays here — but comments are stripped first.
+    """
+    names: list[str] = []
+    for raw in text.splitlines():
+        line = _strip_comment(raw)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _REQ_LINE_RE.match(line)
+        if match:
+            names.append(match.group(1))
+        names.extend(_QUOTED_NAME_RE.findall(stripped))
     return names
 
 
@@ -429,7 +465,8 @@ def _extract_ruby(text: str) -> list[str]:
 # Filename -> ecosystem routing
 # --------------------------------------------------------------------------- #
 
-_PYTHON = _Ecosystem("Python", _PYTHON_DEPS, _extract_python_text)
+_REQUIREMENTS = _Ecosystem("Python", _PYTHON_DEPS, _extract_requirements)
+_PYTHON_SOURCE = _Ecosystem("Python", _PYTHON_DEPS, _extract_python_source)
 _PYPROJECT = _Ecosystem("Python", _PYTHON_DEPS, _extract_pyproject)
 _NPM = _Ecosystem("npm", _JS_DEPS, _extract_npm)
 _CARGO = _Ecosystem("crates.io", _RUST_DEPS, _extract_cargo)
@@ -440,8 +477,8 @@ _RUBYGEMS = _Ecosystem("RubyGems", _RUBY_DEPS, _extract_ruby)
 _PACKAGIST = _Ecosystem("Packagist", _PHP_DEPS, _extract_composer)
 
 _BY_FILENAME: dict[str, _Ecosystem] = {
-    "setup.py": _PYTHON,
-    "Pipfile": _PYTHON,
+    "setup.py": _PYTHON_SOURCE,
+    "Pipfile": _PYTHON_SOURCE,
     "pyproject.toml": _PYPROJECT,
     "package.json": _NPM,
     "Cargo.toml": _CARGO,
@@ -462,7 +499,7 @@ def _ecosystem_for(path: Path) -> Optional[_Ecosystem]:
     if eco is not None:
         return eco
     if _REQUIREMENTS_RE.fullmatch(name):
-        return _PYTHON
+        return _REQUIREMENTS
     if _GEMSPEC_RE.fullmatch(name):
         return _RUBYGEMS
     return None
