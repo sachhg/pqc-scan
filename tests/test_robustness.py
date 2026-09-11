@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -49,6 +50,36 @@ def test_truncated_source_recovers(tmp_path):
     assert result.errors == []
 
 
+def test_a_failing_file_is_recorded_and_the_run_continues(tmp_path, monkeypatch):
+    """One unreadable file must not cost the findings in every other file.
+
+    The failure is injected rather than produced with chmod, because the
+    contract under test is the engine's (a per-file exception becomes a
+    ``ScanResult.errors`` entry), not the host OS's permission model — and
+    ``chmod(0o000)`` does not deny the owner a read on Windows.
+    """
+    good = tmp_path / "good.py"
+    good.write_text("import hashlib\nhashlib.md5(b'x')\n", encoding="utf-8")
+    bad = tmp_path / "bad.py"
+    bad.write_text("import hashlib\n", encoding="utf-8")
+
+    real_read_bytes = Path.read_bytes
+
+    def flaky_read(self):
+        if self.name == "bad.py":
+            raise OSError(13, "Permission denied")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read)
+
+    result = run_scan([tmp_path], PqcConfig.default())
+    assert any(f.rule_id == "PQC010" for f in result.findings), "the run must continue"
+    assert any("bad.py" in error for error in result.errors)
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="chmod(0o000) does not deny the owner a read on Windows"
+)
 def test_unreadable_file_is_recorded_not_crashed(tmp_path):
     target = tmp_path / "locked.py"
     target.write_text("import hashlib\n", encoding="utf-8")

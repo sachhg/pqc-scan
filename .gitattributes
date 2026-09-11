@@ -1,0 +1,16 @@
+# Normalize line endings to LF everywhere.
+#
+# The test suite asserts on exact line numbers, snippet text and base64 bodies
+# of PEM fixtures. A Windows checkout with core.autocrlf=true (the default on
+# GitHub's windows runners) would rewrite those files on the way out of git and
+# make results platform-dependent, so the working tree is pinned to LF.
+* text=auto eol=lf
+
+# Key and certificate fixtures are exact bytes — never touch them.
+*.crt   -text
+*.cer   -text
+*.csr   -text
+*.pem   -text
+*.key   -text
+*.pub   -text
+tests/fixtures/keys/authorized_keys -text
