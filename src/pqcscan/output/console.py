@@ -49,12 +49,15 @@ class ConsoleReporter:
         limit: int = 0,
         summary_only: bool = False,
         group_by: str = "severity",
+        show_suppressed: bool = False,
     ) -> None:
         """Render *result*.
 
         ``limit`` > 0 caps the number of individual findings printed;
         ``summary_only`` prints only the totals and a per-file breakdown;
-        ``group_by`` is ``severity`` (default, most severe first) or ``file``.
+        ``group_by`` is ``severity`` (default, most severe first) or ``file``;
+        ``show_suppressed`` additionally lists findings waived by an inline
+        ``pqc-scan: ignore`` directive.
         """
         console = self.console
         console.print()
@@ -68,11 +71,13 @@ class ConsoleReporter:
             console.print(
                 Text("  ✓ No quantum-vulnerable cryptography detected.", style="bold green")
             )
+            self._suppressed_list(result, show_suppressed)
             self._summary(result)
             return
 
         if summary_only:
             self._file_breakdown(result)
+            self._suppressed_list(result, show_suppressed)
             self._summary(result)
             return
 
@@ -110,6 +115,7 @@ class ConsoleReporter:
                 )
             )
 
+        self._suppressed_list(result, show_suppressed)
         self._summary(result)
 
     # ----- finding rendering --------------------------------------------- #
@@ -199,6 +205,32 @@ class ConsoleReporter:
             group.sort(key=lambda f: (f.line_number, f.column_number, f.rule_id))
         return groups
 
+    # ----- suppressed findings -------------------------------------------- #
+
+    def _suppressed_list(self, result: ScanResult, show: bool) -> None:
+        """List inline-suppressed findings (only with --show-suppressed)."""
+        if not show or not result.suppressed:
+            return
+        console = self.console
+        console.print()
+        console.print(
+            Text(f"  Suppressed ({len(result.suppressed)})", style="bold dim")
+            + Text("  — waived by an inline pqc-scan: ignore directive", style="dim")
+        )
+        console.print()
+        for f in result.suppressed:
+            row = Text("  ○ ", style="dim")
+            row.append(f"{f.severity.upper()} ", style="dim")
+            row.append(f"{f.rule_id}", style="dim bold")
+            row.append(
+                f"  {self._display_path(f.file_path, result)}:{f.line_number}"
+                f"  ({f.algorithm})",
+                style="dim",
+            )
+            console.print(row)
+            if f.suppression_reason:
+                console.print(Text(f"      {f.suppression_reason}", style="italic dim"))
+
     # ----- summary ------------------------------------------------------- #
 
     def _summary(self, result: ScanResult) -> None:
@@ -213,6 +245,8 @@ class ConsoleReporter:
         line.append(" |  ", style="dim")
         line.append("Total findings: ", style="bold")
         line.append(str(result.total), style="bold")
+        if result.suppressed:
+            line.append(f"   (+{len(result.suppressed)} suppressed)", style="dim")
         console.print(line)
 
         meta = Text("  ")
@@ -260,6 +294,7 @@ def render_to_string(
     limit: int = 0,
     summary_only: bool = False,
     group_by: str = "severity",
+    show_suppressed: bool = False,
 ) -> str:
     """Render a result to a plain string (used in tests and --output-file)."""
     console = Console(
@@ -271,5 +306,6 @@ def render_to_string(
         limit=limit,
         summary_only=summary_only,
         group_by=group_by,
+        show_suppressed=show_suppressed,
     )
     return console.export_text()

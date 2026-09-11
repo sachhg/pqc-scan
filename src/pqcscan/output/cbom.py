@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pqcscan import __version__
-from pqcscan.scanner.base import RULES, Finding
+from pqcscan.scanner.base import RULES, Finding, finding_sort_key
 from pqcscan.scanner.engine import ScanResult
 
 # Known OIDs by algorithm family / name fragment.
@@ -207,8 +207,14 @@ def _rel_location(file_path: str, root_path: str) -> str:
 
 
 def _collect_assets(result: ScanResult) -> list[_Asset]:
+    """Group findings into cryptographic assets.
+
+    Inline-suppressed findings are included: a CBOM is an *inventory*, and
+    ``pqc-scan: ignore`` records an accepted risk, not an absent algorithm.
+    Dropping them would under-report the migration surface to auditors.
+    """
     assets: dict[tuple[str, str], _Asset] = {}
-    for f in result.findings:
+    for f in sorted([*result.findings, *result.suppressed], key=finding_sort_key):
         kind, name = _asset_key(f)
         asset = assets.get((kind, name))
         if asset is None:

@@ -89,7 +89,9 @@ def test_cbom_deduplicates_with_occurrences():
     occurrence_total = sum(
         len(c.get("evidence", {}).get("occurrences", [])) for c in doc["components"]
     )
-    assert occurrence_total == len(result.findings)
+    # Suppressed findings are deliberately part of the CBOM inventory, so they
+    # count toward the occurrence total (see cbom._collect_assets).
+    assert occurrence_total == len(result.findings) + len(result.suppressed)
 
 
 def test_cbom_occurrence_locations_are_relative():

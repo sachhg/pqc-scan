@@ -33,6 +33,7 @@ from .base import (
 from .config_scanner import ConfigScanner
 from .context import apply_context_hints
 from .dependency_scanner import DependencyScanner
+from .suppressions import parse_suppressions
 
 _LANG_MODULES = {
     m.LANGUAGE: m for m in (python_rules, javascript_rules, java_rules, go_rules)
@@ -51,6 +52,10 @@ class ScanResult:
     root_path: str = "."
     #: The paths that were requested, as given by the caller.
     scanned_paths: list[str] = field(default_factory=list)
+    #: Findings waived by an inline ``pqc-scan: ignore`` directive. Kept out of
+    #: ``findings`` (so they do not gate CI) but still reported, so a waiver is
+    #: visible in the console summary, in JSON, and as a SARIF suppression.
+    suppressed: list[Finding] = field(default_factory=list)
 
     def counts_by_severity(self) -> dict[str, int]:
         counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -62,6 +67,10 @@ class ScanResult:
     @property
     def total(self) -> int:
         return len(self.findings)
+
+    @property
+    def suppressed_count(self) -> int:
+        return len(self.suppressed)
 
 
 def extensions_for_languages(languages: Iterable[str]) -> set[str]:
@@ -154,9 +163,17 @@ def run_scan(
     filtered = [f for f in findings if meets_threshold(f.severity, threshold)]
     filtered.sort(key=finding_sort_key)
 
+    # Partition out inline-suppressed findings. This runs *after* the threshold
+    # filter so the "suppressed" count only reflects findings that would
+    # otherwise have been reported.
+    suppressed: list[Finding] = []
+    if config.honor_suppressions:
+        filtered, suppressed = partition_suppressed(filtered)
+
     # Attach library-implementation context hints (path heuristic) to findings
     # the language analyzers did not already annotate.
     apply_context_hints(filtered)
+    apply_context_hints(suppressed)
 
     return ScanResult(
         findings=filtered,
@@ -166,7 +183,39 @@ def run_scan(
         errors=errors,
         root_path=root_path,
         scanned_paths=[str(p) for p in path_list],
+        suppressed=suppressed,
     )
+
+
+def partition_suppressed(findings: list[Finding]) -> tuple[list[Finding], list[Finding]]:
+    """Split *findings* into (reported, suppressed) by inline ignore directives.
+
+    Only files that actually produced a finding are re-read, so the common
+    clean-file path costs nothing.
+    """
+    by_file: dict[str, list[Finding]] = {}
+    for finding in findings:
+        by_file.setdefault(finding.file_path, []).append(finding)
+
+    waived: set[int] = set()
+    for file_path, group in by_file.items():
+        try:
+            text = Path(file_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        directives = parse_suppressions(text)
+        if not directives:
+            continue
+        for finding in group:
+            directive = directives.match(finding.rule_id, finding.line_number)
+            if directive is not None:
+                finding.suppressed = True
+                finding.suppression_reason = directive.describe()
+                waived.add(id(finding))
+
+    reported = [f for f in findings if id(f) not in waived]
+    suppressed = [f for f in findings if id(f) in waived]
+    return reported, suppressed
 
 
 def timed_scan(*args, **kwargs) -> ScanResult:

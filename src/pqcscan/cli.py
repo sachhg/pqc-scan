@@ -145,6 +145,14 @@ def scan(
         "severity", "--group-by",
         help="Console grouping: severity (default) or file.",
     ),
+    no_suppress: bool = typer.Option(
+        False, "--no-suppress",
+        help="Ignore inline 'pqc-scan: ignore' directives and report every finding.",
+    ),
+    show_suppressed: bool = typer.Option(
+        False, "--show-suppressed",
+        help="Console output: also list findings waived by an inline ignore directive.",
+    ),
 ) -> None:
     """Scan PATH for quantum-vulnerable cryptography."""
     _require_config_exists(config)
@@ -159,6 +167,8 @@ def scan(
     cfg = _load_config(config, scan_root)
     if severity is not None:
         cfg.severity_threshold = _validate_choice(severity, _VALID_SEVERITIES, "severity")
+    if no_suppress:
+        cfg.honor_suppressions = False
 
     # Explicit --output wins; otherwise fall back to the config's default format.
     chosen = output or (cfg.default_format if cfg.default_format in _VALID_SCAN_FORMATS else "console")
@@ -183,7 +193,12 @@ def scan(
     )
 
     if fmt == "console":
-        render_opts = dict(limit=limit, summary_only=summary, group_by=group_by)
+        render_opts = dict(
+            limit=limit,
+            summary_only=summary,
+            group_by=group_by,
+            show_suppressed=show_suppressed,
+        )
         if output_file:
             # Render into a recording console whose output is discarded (StringIO),
             # then persist only the captured text — otherwise rich would ALSO emit

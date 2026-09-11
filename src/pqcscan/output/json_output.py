@@ -33,9 +33,14 @@ def to_json(result: ScanResult, *, indent: int = 2, generated_at: Optional[str] 
             "by_severity": result.counts_by_severity(),
             "files_scanned": result.files_scanned,
             "duration_seconds": round(result.duration_seconds, 4),
+            "suppressed": len(result.suppressed),
             "errors": result.errors,
         },
         "findings": findings_to_list(result),
+        # Waived by an inline `pqc-scan: ignore` directive. Kept in a separate
+        # array so consumers that gate on `findings` are unaffected, while an
+        # audit can still see (and justify) every waiver.
+        "suppressed_findings": [f.to_dict() for f in result.suppressed],
     }
     return json.dumps(payload, indent=indent)
 

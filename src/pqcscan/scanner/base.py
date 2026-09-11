@@ -92,6 +92,12 @@ class Finding:
     #: Optional hint distinguishing library-implementation code from
     #: application usage (see scanner/context.py). None when no signal fired.
     context_hint: Optional[str] = None
+    #: True when an inline ``pqc-scan: ignore`` directive waived this finding.
+    #: Suppressed findings are kept out of ``ScanResult.findings`` but still
+    #: reported (as SARIF suppressions / counts) so a waiver stays auditable.
+    suppressed: bool = False
+    #: Human-readable description of the directive that suppressed it.
+    suppression_reason: Optional[str] = None
 
     # ----- convenience helpers -------------------------------------------- #
 

@@ -39,6 +39,10 @@ class PqcConfig:
     languages: list[str] = field(default_factory=lambda: list(ALL_LANGUAGES))
     scan_configs: bool = True
     scan_dependencies: bool = True
+    #: Honor inline ``pqc-scan: ignore`` directives. Set false (config
+    #: ``suppressions: false`` / CLI ``--no-suppress``) for an audit run that
+    #: must see waived findings too.
+    honor_suppressions: bool = True
     disabled_rules: set[str] = field(default_factory=set)
     default_format: str = "console"
     cbom_path: str = "cbom.json"
@@ -76,6 +80,8 @@ class PqcConfig:
             cfg.scan_configs = bool(data["scan_configs"])
         if "scan_dependencies" in data:
             cfg.scan_dependencies = bool(data["scan_dependencies"])
+        if "suppressions" in data:
+            cfg.honor_suppressions = bool(data["suppressions"])
 
         rules = data.get("rules") or {}
         if isinstance(rules, dict) and isinstance(rules.get("disable"), list):
