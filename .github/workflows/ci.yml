@@ -73,11 +73,36 @@ jobs:
       - name: Install package
         run: pip install -e ".[dev]"
 
-      - name: Scan fixtures and emit SARIF
-        run: pqc-scan scan tests/fixtures --output sarif --output-file pqc-scan.sarif
+      - name: Scan fixtures in every output format
+        run: |
+          set -euo pipefail
+          pqc-scan scan tests/fixtures -s low --output sarif    --output-file pqc-scan.sarif
+          pqc-scan scan tests/fixtures -s low --output cbom     --output-file cbom.json
+          pqc-scan scan tests/fixtures -s low --output markdown --output-file pqc-scan.md
+          pqc-scan scan tests/fixtures -s low --output json     --output-file pqc-scan.json
 
-      - name: Upload SARIF artifact
+      - name: Validate the machine-readable reports
+        run: |
+          python -c "import json; d=json.load(open('pqc-scan.sarif')); assert d['version']=='2.1.0'; assert d['runs'][0]['results']"
+          python -c "import json; d=json.load(open('cbom.json')); assert d['bomFormat']=='CycloneDX'; assert d['components']"
+          python -c "import json; d=json.load(open('pqc-scan.json')); assert d['summary']['total']>0"
+
+      - name: Smoke-test the other commands
+        run: |
+          set -euo pipefail
+          pqc-scan rules --json > /dev/null
+          pqc-scan explain PQC001 > /dev/null
+          pqc-scan explain PQC016 --json > /dev/null
+          # A baseline of the fixtures must make a rescan completely clean.
+          pqc-scan baseline tests/fixtures -s low --output-file baseline.json
+          pqc-scan scan tests/fixtures -s low --baseline baseline.json \
+            --fail-on-findings --output json --output-file /dev/null
+
+      - name: Upload reports
         uses: actions/upload-artifact@v4
         with:
-          name: pqc-scan-sarif
-          path: pqc-scan.sarif
+          name: pqc-scan-reports
+          path: |
+            pqc-scan.sarif
+            pqc-scan.md
+            cbom.json

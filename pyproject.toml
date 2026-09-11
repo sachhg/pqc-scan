@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pqc-scan"
-version = "0.1.0"
+version = "0.2.0"
 description = "Developer-native scanner for quantum-vulnerable cryptography"
 readme = "README.md"
 requires-python = ">=3.10"

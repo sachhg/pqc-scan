@@ -1,8 +1,8 @@
 # pqc-scan
 
 **Snyk for Post-Quantum Cryptography** — a developer-first static analysis tool that
-finds quantum-vulnerable cryptography in your code, configs, and dependencies before
-quantum computers (or your auditors) do.
+finds quantum-vulnerable cryptography in your code, configs, dependencies, keys and
+certificates before quantum computers (or your auditors) do.
 
 `pqc-scan` is zero-friction and lives where your code lives: in your editor, on the
 command line, and right inside your pull requests. It parses real source with
@@ -85,7 +85,7 @@ This installs the `pqc-scan` console script. Verify:
 
 ```bash
 pqc-scan --version
-# pqc-scan 0.1.0
+# pqc-scan 0.2.0
 ```
 
 For development (tests + coverage):
@@ -95,9 +95,10 @@ pip install -e ".[dev]"
 pytest
 ```
 
-All scanning dependencies (tree-sitter grammars for Python, JavaScript, Java, Go,
-plus Typer, Rich and PyYAML) are installed automatically — there is **no** native
-toolchain to build.
+All scanning dependencies (tree-sitter grammars for Python, JavaScript, Java, Go
+and Rust, plus Typer, Rich and PyYAML) are installed automatically — there is
+**no** native toolchain to build. Key and certificate parsing uses a small
+built-in DER reader, so no OpenSSL or Rust toolchain is required either.
 
 ---
 
@@ -107,12 +108,17 @@ toolchain to build.
 pqc-scan scan .                       # scan the current tree, pretty console report
 pqc-scan scan src/ -s high            # only report HIGH and CRITICAL findings
 pqc-scan scan . -o sarif -f out.sarif # write SARIF for GitHub code scanning
+pqc-scan scan . -o markdown           # a report you can paste into a PR comment
 pqc-scan scan . --changed-only        # only files changed in the current git diff
+pqc-scan scan . -s medium --fail-on critical   # report widely, block narrowly
+pqc-scan baseline .                    # accept today's findings; gate on new ones
+pqc-scan explain PQC001                # full rule + before/after migration example
 pqc-scan rules                         # list every detection rule
 pqc-scan init                          # write a starter .pqcscan.yml
 ```
 
-`pqc-scan` exposes four commands: `scan`, `report`, `init`, and `rules`.
+`pqc-scan` exposes six commands: `scan`, `report`, `baseline`, `init`, `rules`,
+and `explain`.
 
 ### `scan` — scan a path
 
@@ -124,7 +130,7 @@ pqc-scan scan [PATH] [OPTIONS]
 
 | Flag | Alias | Description |
 | --- | --- | --- |
-| `--output` | `-o` | Output format: `console` (default), `sarif`, `cbom`, `json`. |
+| `--output` | `-o` | Output format: `console` (default), `sarif`, `cbom`, `json`, `markdown`. |
 | `--output-file` | `-f` | Write output to this file instead of stdout. |
 | `--severity` | `-s` | Minimum severity to report: `critical`, `high`, `medium`, `low`. |
 | `--exclude` | | Glob pattern to exclude. Repeatable. |
@@ -132,6 +138,11 @@ pqc-scan scan [PATH] [OPTIONS]
 | `--config` | | Path to a `.pqcscan.yml` config file. |
 | `--no-color` | | Disable colored output (auto-disabled when writing to a file). |
 | `--fail-on-findings` | | Exit with code `1` if any findings are reported — for CI gating. |
+| `--fail-on SEV` | | Exit with code `1` only when a finding is at least this severe. |
+| `--baseline FILE` | | Report only findings that are **not** in this baseline. |
+| `--no-baseline` | | Ignore a baseline configured in `.pqcscan.yml`. |
+| `--no-suppress` | | Ignore inline `pqc-scan: ignore` directives (audit mode). |
+| `--show-suppressed` | | Also list suppressed findings, with their reasons. |
 | `--limit N` | | Show at most `N` findings in console output (`0` = all). |
 | `--summary` | | Console output: totals and a per-file breakdown only, no per-finding detail. |
 | `--group-by` | | Console grouping: `severity` (default) or `file`. |
@@ -150,6 +161,9 @@ pqc-scan scan src/ -o json
 
 # Only audit what this branch changed, at HIGH severity and above.
 pqc-scan scan . --changed-only -s high --fail-on-findings
+
+# Report everything from medium up, but only fail the build on a critical.
+pqc-scan scan . -s medium --fail-on critical
 
 # Large repo? Get the overview first, then drill into one file at a time.
 pqc-scan scan . --summary
@@ -196,7 +210,7 @@ Example console output (scanning a single file):
 the format defaults to `cbom` and `--output-file` is **required**.
 
 ```text
-pqc-scan report [PATH] --output-file FILE [--format cbom|sarif|json] [--config FILE]
+pqc-scan report [PATH] --output-file FILE [--format cbom|sarif|json|markdown] [--config FILE]
 ```
 
 ```bash
@@ -205,6 +219,39 @@ pqc-scan report . --output-file cbom.json
 
 # Generate a SARIF report for archival / upload.
 pqc-scan report . --format sarif --output-file results.sarif
+```
+
+### `baseline` — accept today's findings
+
+```text
+pqc-scan baseline [PATH] [--output-file FILE] [--severity SEV] [--exclude GLOB] [--config FILE]
+```
+
+Writes `.pqcscan-baseline.json` (by default, next to `PATH`). Commit it, then
+point `scan` at it so only *new* findings are reported. See
+[Baselines](#baselines) below.
+
+### `explain` — read one rule in full
+
+```text
+pqc-scan explain PQC001 [--json]
+```
+
+Prints the rule, its severity and category, the recommended post-quantum
+replacement, and the **before/after code example** — which is the one piece of
+migration guidance that console and SARIF output are too terse to show.
+
+```text
+PQC001  RSA Key Generation  critical  (key-generation · pke)
+
+RSA key generation detected. RSA is broken by Shor's algorithm on a
+cryptographically relevant quantum computer, regardless of key size.
+
+Migrate to
+  ML-KEM-768 (CRYSTALS-Kyber) for encryption / key establishment, or
+  ML-DSA-65 (CRYSTALS-Dilithium) if the key is used for signing
+  FIPS 203 (ML-KEM) / FIPS 204 (ML-DSA)
+...
 ```
 
 ### `init` — scaffold a config
@@ -224,18 +271,19 @@ pqc-scan init
 ### `rules` — list detection rules
 
 ```bash
-pqc-scan rules
+pqc-scan rules          # table
+pqc-scan rules --json   # the registry, for your own tooling
 ```
 
-Prints a table of every rule (ID, name, severity, category, description).
+Prints every rule (ID, name, severity, category, description).
 
 ---
 
 ## What it detects
 
-`pqc-scan` ships **14 rules**, covering quantum-vulnerable key generation, signatures,
-encryption, key exchange, hashing, weak JWT/TLS configuration, legacy ciphers, and
-quantum-vulnerable dependencies.
+`pqc-scan` ships **16 rules**, covering quantum-vulnerable key generation, signatures,
+encryption, key exchange, hashing, weak JWT/TLS configuration, legacy ciphers,
+quantum-vulnerable dependencies, and deployed key material and certificates.
 
 | ID | Name | Severity | Category |
 | --- | --- | --- | --- |
@@ -253,13 +301,28 @@ quantum-vulnerable dependencies.
 | **PQC012** | Weak TLS Configuration | `medium` | configuration |
 | **PQC013** | DES / 3DES Usage | `high` | encryption |
 | **PQC014** | Quantum-Vulnerable Dependency | `medium` | dependency |
+| **PQC015** | Quantum-Vulnerable Key Material | `high` | key-material |
+| **PQC016** | Quantum-Vulnerable Certificate | `high` | certificate |
 
 Run `pqc-scan rules` for the full descriptions and to confirm the set installed on
 your machine.
 
-**Supported languages (code):** Python, JavaScript/TypeScript, Java, Go.
-**Supported manifests/configs:** `requirements.txt`, `package.json`, plus
-YAML / JSON / TOML / `.conf` configuration files (TLS, JWT, cipher lists).
+**Supported languages (code):** Python, JavaScript/TypeScript, Java, Go, Rust.
+
+**Supported dependency manifests:** `requirements*.txt`, `setup.py`,
+`pyproject.toml`, `Pipfile`, `package.json`, `Cargo.toml`, `go.mod`, `pom.xml`,
+`build.gradle` / `build.gradle.kts`, `Gemfile` / `*.gemspec`, `composer.json`.
+Each is parsed in its own format — a version string or repository URL that merely
+contains a library name does not fire. Lock files are deliberately out of scope:
+they restate the manifest plus the whole transitive closure and would bury the
+actionable direct declaration.
+
+**Supported configs:** YAML / JSON / TOML / `.conf` / `.ini` / `.env` (TLS, JWT,
+cipher lists, protocol versions).
+
+**Supported key material:** `.pem`, `.crt`, `.cer`, `.key`, `.pub`, `.csr`,
+`id_*`, `authorized_keys`, `known_hosts` — and PEM blocks inlined into
+configuration files.
 
 **Library coverage highlights** (beyond the language standard libraries):
 
@@ -277,6 +340,11 @@ YAML / JSON / TOML / `.conf` configuration files (TLS, JWT, cipher lists).
 - **Go** — `crypto/rsa`, `crypto/ecdsa`, `crypto/ecdh`, `crypto/ed25519`,
   `crypto/dsa`, `crypto/tls` configuration (`MinVersion` pins and weak
   `CipherSuites`), `x/crypto/curve25519`, and golang-jwt signing methods.
+- **Rust** — RustCrypto (`rsa`, `p256`/`p384`/`p521`/`k256`, `ed25519-dalek`,
+  `x25519-dalek`, `sha1`, `md-5`, `des`), `ring` (`signature::*`,
+  `agreement::*`, `digest::SHA1_*`), the `openssl` bindings (`Rsa::generate`,
+  `EcKey`, `Dsa`, `Dh`, `MessageDigest::sha1`, DES `Cipher`s, legacy
+  `SslVersion`), and `jsonwebtoken`.
 
 **Context hints.** Findings inside code that *looks like* crypto-library
 plumbing (paths containing `hazmat`, `_internal`, `backends`, `vendor`, …) or
@@ -284,6 +352,109 @@ inside a `generate_*_key()`-style wrapper carry a `context_hint` explaining
 whether the call site is actionable for you or belongs to a library you merely
 consume. Hints appear in console output, SARIF `properties.contextHint`, and
 the JSON `context_hint` field.
+
+**Keys and certificates.** `PQC015` / `PQC016` read the actual DER, not the PEM
+label, so a finding names the real parameters — `RSA-3072`, `ECDSA-P-384`,
+`Ed25519` — along with a certificate's subject CN, signature algorithm and
+expiry:
+
+```text
+  ⚠  HIGH  PQC016 · Quantum-Vulnerable Certificate   [high confidence]
+  ┌─ deploy/tls/server.crt:1:1   (RSA-2048)
+  │  -----BEGIN CERTIFICATE-----
+  └─ X.509 certificate with a RSA-2048 public key (subject CN=api.example.com;
+     signed with sha256WithRSAEncryption; expires 2027-03-04). …
+```
+
+That matters for precision as much as for detail: a PKCS#8 block labelled
+`PRIVATE KEY` may hold RSA, EC, Ed25519 — **or ML-DSA**, which must not be
+flagged. Only algorithms on a known quantum-vulnerable OID list produce a
+finding, so real ML-KEM / ML-DSA keys and ML-DSA-signed certificates come back
+clean. A certificate signed with SHA-1 or MD5 is additionally reported as
+`critical`, because that signature is forgeable today without any quantum
+computer.
+
+---
+
+## Living with a scan
+
+Two features exist so that dropping `pqc-scan` into a repository that already has
+crypto does not mean a permanently red build or a disabled scanner.
+
+### Inline suppressions
+
+Waive a finding next to the code that needs it, with a reason:
+
+```python
+key = rsa.generate_private_key(...)   # pqc-scan: ignore[PQC001] -- legacy peer, JIRA-42
+
+# pqc-scan: ignore-next-line[PQC004,PQC005]
+key = ec.generate_private_key(ec.SECP256R1())
+```
+
+```go
+// pqc-scan: ignore-file[PQC014] -- vendored reference implementation
+```
+
+| Directive | Applies to |
+| --- | --- |
+| `pqc-scan: ignore` | the line it appears on |
+| `pqc-scan: ignore-next-line` | the following line |
+| `pqc-scan: ignore-file` | every finding in the file |
+
+- A bracketed list scopes the waiver (`ignore[PQC001,PQC009]`); no brackets means
+  every rule. Rule IDs are case-insensitive.
+- Text after `--` is recorded as the reason and reported back.
+- The parser is **comment-syntax agnostic** — `#`, `//`, `/* */`, `<!-- -->` and
+  YAML comments all work, in source, configs and manifests alike. The trade-off
+  is that a directive inside a string literal also suppresses.
+
+Waivers stay auditable rather than disappearing:
+
+- suppressed findings never gate CI and are not counted in `total`;
+- they are emitted in SARIF with `suppressions: [{ "kind": "inSource" }]`, which
+  GitHub code scanning honors — the finding is recorded, not shown as an open alert;
+- they appear in JSON under `suppressed_findings`, and in the console summary as
+  `(+N suppressed)`; `--show-suppressed` lists them with their reasons;
+- they are **still inventoried in the CBOM**, because an accepted risk is still a
+  deployed algorithm.
+
+`--no-suppress` (or `suppressions: false` in config) ignores every directive, for
+an audit run that must see everything.
+
+### Baselines
+
+A baseline says "this is the debt we already have; tell me about anything new."
+
+```bash
+# 1. Snapshot the current findings and commit the file.
+pqc-scan baseline .
+git add .pqcscan-baseline.json
+
+# 2. In CI, gate on new crypto only.
+pqc-scan scan . --baseline .pqcscan-baseline.json --fail-on high
+```
+
+Or configure it once, in `.pqcscan.yml`:
+
+```yaml
+baseline: .pqcscan-baseline.json
+```
+
+Fingerprints hash the rule ID, the baseline-relative file path, the algorithm and
+the whitespace-normalized snippet — **not the line number**. Adding an import
+above a finding does not invalidate the baseline, and neither does reformatting.
+Identical findings are tracked by count, so if a file baselines two
+`hashlib.sha1()` calls and someone adds a third, the third is reported as new.
+
+The document keeps `rule_id` / `path` / `algorithm` alongside each hash, so a
+baseline diff is reviewable in a pull request instead of being an opaque wall of
+hashes. Regenerating prints what changed since the previous snapshot.
+
+Baselined findings are kept out of SARIF — the whole point is that pre-existing
+debt stops annotating pull requests — but remain in the CBOM inventory and in the
+JSON `baselined_findings` array. A missing or malformed baseline file exits `2`
+rather than silently treating everything as new.
 
 ---
 
@@ -313,7 +484,7 @@ pqc-scan scan . -o sarif -f pqc-scan.sarif
   "version": "2.1.0",
   "runs": [
     {
-      "tool": { "driver": { "name": "pqc-scan", "version": "0.1.0", "rules": [ ... ] } },
+      "tool": { "driver": { "name": "pqc-scan", "version": "0.2.0", "rules": [ ... ] } },
       "results": [ ... ]
     }
   ]
@@ -340,6 +511,38 @@ pqc-scan report . --format cbom --output-file cbom.json
 }
 ```
 
+### `markdown` — pull-request comments and CI job summaries
+
+A report you can paste into a PR comment or pipe straight into
+`$GITHUB_STEP_SUMMARY`: a counts table, one scannable row per finding, and the
+migration guidance folded into `<details>` blocks so the comment stays short
+until someone opens one.
+
+```bash
+pqc-scan scan . -o markdown -f pqc-scan.md
+```
+
+```markdown
+## 🔐 pqc-scan — Post-Quantum Cryptography scan
+
+| Critical | High | Medium | Low | Total |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 2 | 0 | 0 | **4** |
+
+_1 file(s) scanned · 0.01s_
+
+### Findings
+
+| Severity | Rule | Name | Location | Algorithm |
+| --- | --- | --- | --- | --- |
+| 🔴 critical | `PQC001` | RSA Key Generation | `app/keys.py:10` | RSA-2048 |
+```
+
+Table rows and detail blocks are capped independently (100 and 20 by default) so
+the output stays under GitHub's 65,536-character comment limit; whatever is left
+out is stated explicitly rather than silently truncated. The GitHub Action writes
+this to the job summary page automatically.
+
 ### `json` — plain JSON
 
 Scan metadata plus every finding with full migration metadata — easy to pipe into
@@ -352,7 +555,7 @@ pqc-scan scan . -o json | jq '.findings[] | {rule_id, severity, file_path, line_
 ```json
 {
   "tool": "pqc-scan",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "generated_at": "2026-07-06T12:00:00Z",
   "paths": ["/repo"],
   "summary": {
@@ -407,32 +610,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                  # only needed for changed-only
 
       - name: Run pqc-scan
         uses: ./                          # this repo's action; or pin: pqc-scan/pqc-scan@v1
         with:
           path: .
-          severity: high                  # critical | high | medium | low
-          output-sarif: pqc-scan.sarif
-          fail-on-findings: 'false'        # set 'true' to block the PR on any finding
-
-      - name: Upload SARIF to GitHub code scanning
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: pqc-scan.sarif
+          severity: medium                # report from medium up...
+          fail-on: critical               # ...but only block the PR on a critical
+          changed-only: ${{ github.event_name == 'pull_request' }}
 ```
+
+The action uploads the SARIF to code scanning itself, so no separate
+`upload-sarif` step is required.
 
 **Action inputs**
 
 | Input | Default | Description |
 | --- | --- | --- |
 | `path` | `.` | File or directory to scan. |
-| `severity` | `medium` | Minimum severity to report. |
+| `severity` | `medium` | Minimum severity to **report**. |
+| `fail-on` | `''` | Fail the job only when a finding is at least this severe. |
+| `fail-on-findings` | `false` | Fail the job if **any** finding is reported. |
+| `changed-only` | `false` | Only scan files changed in this PR (needs `fetch-depth: 0`). |
+| `baseline` | `''` | Baseline file of accepted findings; report only what is new. |
+| `config` | `''` | Path to a `.pqcscan.yml` config file. |
 | `output-sarif` | `pqc-scan.sarif` | Path to write the SARIF report. |
-| `fail-on-findings` | `false` | Fail the job (exit 1) if any findings are reported. |
+| `upload-sarif` | `true` | Upload the SARIF to GitHub code scanning. |
+| `job-summary` | `true` | Write the Markdown report to the job summary page. |
+| `python-version` | `3.12` | Python used to run pqc-scan. |
 
-The action exits `0` when the scan is clean; with `fail-on-findings: 'true'` the
-SARIF is still uploaded before the job is failed, so annotations always appear.
+**Action outputs**
+
+| Output | Description |
+| --- | --- |
+| `sarif-file` | Path of the SARIF report that was written. |
+| `total-findings` | Number of findings reported by the scan. |
+
+`severity` and `fail-on` are deliberately separate: the common setup reports
+everything from `medium` up — so it all shows as code-scanning annotations and in
+the job summary — while only a `critical` finding actually blocks the pull
+request. The SARIF is written before the failing exit, so annotations appear even
+on a red build.
 
 If you prefer to run the CLI directly without the composite action, the equivalent
 step is just:
@@ -468,22 +688,33 @@ languages:
   - javascript
   - java
   - go
+  - rust
 
 scan_configs: true        # Scan YAML/JSON/TOML/.conf config files
-scan_dependencies: true   # Scan dependency manifests (requirements.txt, package.json, ...)
+scan_dependencies: true   # Scan dependency manifests (requirements.txt, Cargo.toml, ...)
+scan_certificates: true   # Scan PEM/OpenSSH keys and X.509 certificates (PQC015/PQC016)
+
+# Honor inline "pqc-scan: ignore" directives (set false for an audit run).
+suppressions: true
+
+# Path to a baseline of accepted findings, relative to this file. Generate it
+# with `pqc-scan baseline`; later scans then report only NEW findings.
+# baseline: .pqcscan-baseline.json
 
 rules:
   disable: []             # e.g. [PQC010] to silence a specific rule
 
 output:
-  default_format: console # console | sarif | cbom | json
+  default_format: console # console | sarif | cbom | json | markdown
   cbom_path: cbom.json
 ```
 
 Notes:
 
 - CLI flags override config values (e.g. `-s high` beats `severity_threshold`).
-- `rules.disable` takes rule IDs (`PQC001` … `PQC014`), case-insensitive.
+- `rules.disable` takes rule IDs (`PQC001` … `PQC016`), case-insensitive.
+- `baseline` is resolved relative to the config file, so the same config works
+  from any working directory. `--no-baseline` overrides it.
 - Without a config file, the defaults exclude `**/tests/**`, `**/node_modules/**`,
   `**/.venv/**`, `**/venv/**`, `**/vendor/**`, `**/dist/**`, and `**/build/**`
   (the `tests` glob matches test directories at **any** depth), and the walker
@@ -512,6 +743,8 @@ before/after code example. The high-level mapping:
 | Weak JWT RS/ES/PS256 (PQC011) | HS256 internally; track IETF JOSE for PQC | — |
 | Weak TLS config (PQC012) | TLS 1.3 + hybrid **X25519MLKEM768** | FIPS 203 |
 | DES / 3DES (PQC013) | **AES-256-GCM** | FIPS 197 |
+| Stored key material (PQC015) | **ML-KEM-768** / **ML-DSA-65** — inventory, reissue, revoke | FIPS 203 / 204 |
+| Certificates (PQC016) | **ML-DSA-65** or hybrid/composite certificates | FIPS 204 |
 
 > **Heads-up about liboqs.** The Python post-quantum library `oqs`
 > (liboqs-python) is **not** a pure `pip install`. It wraps the compiled **liboqs**
@@ -561,9 +794,25 @@ detection, but a few caveats apply:
   crypto APIs per language; exotic or in-house wrappers may not be recognized.
 - **Configuration heuristics are pattern-based** and can occasionally over- or
   under-match unusual config layouts. Tune with `rules.disable` and `exclude`.
+- **Rust detection needs a resolvable import.** A call whose type does not trace
+  back to a known crate through a `use` declaration is not flagged — deliberately,
+  since a local `Sha1` type is as likely as the crate.
+- **Encrypted private keys are skipped.** Their algorithm cannot be determined
+  without the passphrase, and guessing from the PEM label would be wrong as often
+  as right.
+- **Lock files are not scanned.** They restate the manifest plus the whole
+  transitive closure; the direct declaration in the manifest is the actionable one.
+- **Inline suppressions are text-matched**, so a `pqc-scan: ignore` directive
+  inside a string literal also suppresses.
 
 Use `--changed-only` for fast PR feedback, the full scan for an inventory/CBOM, and
 the migration guidance attached to each finding as your remediation checklist.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md). The current release is **0.2.0**.
 
 ---
 
