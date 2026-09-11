@@ -24,6 +24,17 @@ Supported forms (case-insensitive, ``pqcscan``/``pqc_scan`` also accepted)::
 following line, and ``ignore-file`` to every finding in the file. An empty or
 absent rule list means "every rule". Text after ``--`` is recorded as the reason
 and reported back so a reviewer can audit why something was waived.
+
+A finding that spans several lines (a multi-line call) is suppressed by a
+directive on **any** of its lines, so the idiomatic trailing comment works::
+
+    key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )  # pqc-scan: ignore[PQC001]
+
+Anchoring only to the first line would silently do nothing there, which is the
+worst failure mode for an escape hatch.
 """
 
 from __future__ import annotations
@@ -77,14 +88,23 @@ class FileSuppressions:
         self._file: list[Directive] = []
         self._lines: dict[int, list[Directive]] = {}
 
-    def match(self, rule_id: str, line_number: int) -> Optional[Directive]:
-        """The directive suppressing *rule_id* at *line_number*, if any."""
+    def match(
+        self, rule_id: str, line_number: int, end_line_number: Optional[int] = None
+    ) -> Optional[Directive]:
+        """The directive suppressing *rule_id* over ``line_number..end_line_number``.
+
+        *end_line_number* defaults to *line_number* (a single-line finding). Any
+        directive inside the span counts, so a trailing comment on the closing
+        line of a multi-line call suppresses it.
+        """
         for directive in self._file:
             if directive.covers(rule_id):
                 return directive
-        for directive in self._lines.get(line_number, ()):
-            if directive.covers(rule_id):
-                return directive
+        last = line_number if end_line_number is None else max(line_number, end_line_number)
+        for line in range(line_number, last + 1):
+            for directive in self._lines.get(line, ()):
+                if directive.covers(rule_id):
+                    return directive
         return None
 
     def __bool__(self) -> bool:

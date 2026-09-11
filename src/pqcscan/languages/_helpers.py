@@ -36,6 +36,20 @@ def line_col(node) -> tuple[int, int]:
     return row + 1, col + 1
 
 
+def end_line(node) -> int:
+    """1-based line on which *node* ends.
+
+    tree-sitter's ``end_point`` is exclusive, so a node whose last character is
+    a newline reports the *following* row at column 0. Stepping back in that
+    case keeps the span to the lines the node actually occupies, which is what
+    an inline suppression directive is matched against.
+    """
+    row, col = node.end_point
+    if col == 0 and row > node.start_point[0]:
+        row -= 1
+    return row + 1
+
+
 def snippet(node, *, max_lines: int = 6) -> str:
     """Source text of *node*, trimmed to *max_lines* for display."""
     raw = text(node)

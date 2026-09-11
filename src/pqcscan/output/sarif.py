@@ -102,6 +102,11 @@ def _result(f: Finding, rule_index: dict[str, int], base_path: str, root_path: s
         "startLine": max(1, f.line_number),
         "startColumn": max(1, f.column_number),
     }
+    # Annotate the whole construct when it spans several lines, so a multi-line
+    # key-generation call is highlighted in full rather than by its first line.
+    start, end = f.line_span
+    if end > start:
+        region["endLine"] = end
     snippet = (f.code_snippet or "").strip()
     if snippet:
         region["snippet"] = {"text": snippet}

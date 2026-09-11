@@ -91,6 +91,11 @@ class Finding:
     code_snippet: str
     migration_suggestion: MigrationSuggestion
     rule_id: str
+    #: Last line the detected construct occupies. ``None`` means it is a
+    #: single-line finding. Inline suppression directives are matched against
+    #: the whole span, so a trailing ``# pqc-scan: ignore`` after a multi-line
+    #: call works the way a developer expects.
+    end_line_number: Optional[int] = None
     #: Optional hint distinguishing library-implementation code from
     #: application usage (see scanner/context.py). None when no signal fired.
     context_hint: Optional[str] = None
@@ -113,6 +118,14 @@ class Finding:
     @property
     def location(self) -> str:
         return f"{self.file_path}:{self.line_number}:{self.column_number}"
+
+    @property
+    def line_span(self) -> tuple[int, int]:
+        """Inclusive (first, last) line the finding covers."""
+        end = self.end_line_number
+        if end is None or end < self.line_number:
+            return self.line_number, self.line_number
+        return self.line_number, end
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -333,6 +346,7 @@ def build_finding(
     column_number: int,
     algorithm: str,
     code_snippet: str,
+    end_line_number: int | None = None,
     severity: str | None = None,
     confidence: str = CONFIDENCE_HIGH,
     category: str | None = None,
@@ -366,6 +380,7 @@ def build_finding(
         code_snippet=code_snippet,
         migration_suggestion=migration,
         rule_id=rule_id,
+        end_line_number=end_line_number,
         context_hint=context_hint,
     )
 

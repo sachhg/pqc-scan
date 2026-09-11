@@ -132,6 +132,7 @@ class _JavaAnalyzer:
 
     def _add(self, rule_id: str, node, algorithm: str, **kwargs) -> None:
         line, col = h.line_col(node)
+        last_line = h.end_line(node)
         key = (rule_id, line, col)
         if key in self._seen:
             return
@@ -144,6 +145,7 @@ class _JavaAnalyzer:
                 column_number=col,
                 algorithm=algorithm,
                 code_snippet=h.snippet(node),
+                end_line_number=last_line,
                 **kwargs,
             )
         )

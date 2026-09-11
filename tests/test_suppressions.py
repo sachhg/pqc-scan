@@ -223,3 +223,84 @@ def test_config_can_disable_suppressions(tmp_path):
     )
     data = json.loads(result.stdout)
     assert data["summary"]["total"] == 4
+
+
+# --------------------------------------------------------------------------- #
+# Multi-line findings
+# --------------------------------------------------------------------------- #
+
+
+def test_directive_on_the_closing_line_of_a_multiline_call_suppresses(tmp_path):
+    """The idiomatic place to put the comment must actually work.
+
+    Anchoring only to the finding's first line would silently do nothing here,
+    which is the worst failure mode for an escape hatch.
+    """
+    src = tmp_path / "keys.py"
+    src.write_text(
+        "from cryptography.hazmat.primitives.asymmetric import rsa\n"
+        "key = rsa.generate_private_key(\n"
+        "    public_exponent=65537,\n"
+        "    key_size=2048,\n"
+        ")  # pqc-scan: ignore[PQC001] -- accepted\n",
+        encoding="utf-8",
+    )
+    result = _scan(src)
+    assert result.findings == []
+    assert [f.rule_id for f in result.suppressed] == ["PQC001"]
+
+
+def test_directive_inside_a_multiline_call_suppresses(tmp_path):
+    src = tmp_path / "keys.py"
+    src.write_text(
+        "from cryptography.hazmat.primitives.asymmetric import rsa\n"
+        "key = rsa.generate_private_key(\n"
+        "    public_exponent=65537,  # pqc-scan: ignore[PQC001]\n"
+        "    key_size=2048,\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    assert _scan(src).findings == []
+
+
+def test_a_directive_below_the_span_does_not_suppress(tmp_path):
+    """The span is a bound, not an invitation to suppress the whole file."""
+    src = tmp_path / "keys.py"
+    src.write_text(
+        "from cryptography.hazmat.primitives.asymmetric import rsa\n"
+        "key = rsa.generate_private_key(public_exponent=65537, key_size=2048)\n"
+        "other = 1  # pqc-scan: ignore[PQC001]\n",
+        encoding="utf-8",
+    )
+    assert [f.rule_id for f in _scan(src).findings] == ["PQC001"]
+
+
+def test_findings_record_their_line_span(tmp_path):
+    src = tmp_path / "keys.py"
+    src.write_text(
+        "from cryptography.hazmat.primitives.asymmetric import rsa\n"
+        "key = rsa.generate_private_key(\n"
+        "    public_exponent=65537,\n"
+        "    key_size=2048,\n"
+        ")\n"
+        "import hashlib\n"
+        "h = hashlib.sha1(b'x')\n",
+        encoding="utf-8",
+    )
+    spans = {f.rule_id: f.line_span for f in _scan(src).findings}
+    assert spans["PQC001"] == (2, 5)
+    # A single-line finding reports a degenerate span, never None.
+    assert spans["PQC009"] == (7, 7)
+
+
+def test_sarif_annotates_the_whole_span():
+    result = _scan(FIXTURES / "vulnerable_rsa.py")
+    doc = sarif_out.to_sarif(result, base_path=str(FIXTURES))
+    regions = [
+        r["locations"][0]["physicalLocation"]["region"] for r in doc["runs"][0]["results"]
+    ]
+    multiline = [r for r in regions if "endLine" in r]
+    assert multiline, "a multi-line call should carry endLine"
+    assert all(r["endLine"] > r["startLine"] for r in multiline)
+    # Single-line findings must not carry a redundant endLine.
+    assert any("endLine" not in r for r in regions)

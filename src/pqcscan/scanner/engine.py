@@ -255,7 +255,8 @@ def partition_suppressed(findings: list[Finding]) -> tuple[list[Finding], list[F
         if not directives:
             continue
         for finding in group:
-            directive = directives.match(finding.rule_id, finding.line_number)
+            start, end = finding.line_span
+            directive = directives.match(finding.rule_id, start, end)
             if directive is not None:
                 finding.suppressed = True
                 finding.suppression_reason = directive.describe()
